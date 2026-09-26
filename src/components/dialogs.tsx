@@ -204,15 +204,18 @@ function DepositForm({ draft, institutions, onClose, onSave, onDelete }: {
 
 /* ======================= Close (tất toán) ======================= */
 export type Rollover = "none" | "principal" | "all";
+/** Tiền nhận về chuyển vào đâu: không ghi / cộng vào tài sản tiền mặt có sẵn / tạo tài khoản tiền mặt mới. */
+export type Payout = { dest: "none" } | { dest: "existing"; holdingId: string; amount: number } | { dest: "new"; name: string; place: string; amount: number };
 
-export function CloseDialog({ deposit, onClose, onConfirm }: {
+export function CloseDialog({ deposit, cashAccounts, onClose, onConfirm }: {
   deposit: Deposit | null;
+  cashAccounts: Holding[];
   onClose: () => void;
-  onConfirm: (d: Deposit, x: DepositInput, roll: Rollover) => Promise<boolean>;
+  onConfirm: (d: Deposit, x: DepositInput, roll: Rollover, payout: Payout) => Promise<boolean>;
 }) {
   return (
     <Modal open={!!deposit} onClose={onClose}>
-      {deposit && <CloseForm key={deposit.id} d={deposit} onClose={onClose} onConfirm={onConfirm} />}
+      {deposit && <CloseForm key={deposit.id} d={deposit} cashAccounts={cashAccounts} onClose={onClose} onConfirm={onConfirm} />}
     </Modal>
   );
 }
@@ -224,7 +227,10 @@ function suggested(d: Deposit, date: string) {
   return { early, gi, tax: (gi * (d.taxPct || 0)) / 100 };
 }
 
-function CloseForm({ d, onClose, onConfirm }: { d: Deposit; onClose: () => void; onConfirm: (d: Deposit, x: DepositInput, roll: Rollover) => Promise<boolean> }) {
+function CloseForm({ d, cashAccounts, onClose, onConfirm }: {
+  d: Deposit; cashAccounts: Holding[]; onClose: () => void;
+  onConfirm: (d: Deposit, x: DepositInput, roll: Rollover, payout: Payout) => Promise<boolean>;
+}) {
   const t = today();
   const m = pd(d.maturityDate);
   const [date, setDate] = useState(fd(t >= m ? m : Math.max(t, pd(d.openDate) + 86_400_000)));
@@ -233,6 +239,9 @@ function CloseForm({ d, onClose, onConfirm }: { d: Deposit; onClose: () => void;
   const [tax, setTax] = useState<number | null>(Math.round(s0.tax));
   const [fee, setFee] = useState<number | null>(0);
   const [roll, setRoll] = useState<Rollover>("none");
+  // Mặc định chuyển vào tài khoản tiền mặt cùng nơi gửi nếu có, không thì tạo mới
+  const sameInst = cashAccounts.find((h) => h.place.toLowerCase() === d.institution.toLowerCase());
+  const [dest, setDest] = useState<string>(sameInst?.id ?? (cashAccounts[0]?.id || "new"));
   const [busy, setBusy] = useState(false);
 
   const changeDate = (v: string) => {
@@ -246,6 +255,11 @@ function CloseForm({ d, onClose, onConfirm }: { d: Deposit; onClose: () => void;
   const s = valid ? suggested(d, date) : s0;
   const held = valid ? days(pd(d.openDate), pd(date)) : 0;
   const net = (gi || 0) - (tax || 0) - (fee || 0);
+  // Tiền thực sự về tài khoản: không tái tục = gốc + lãi ròng; tái tục gốc = lãi ròng; tái tục cả = 0
+  const payoutAmount = roll === "none" ? d.principal + net : roll === "principal" ? net : 0;
+  const payout: Payout = payoutAmount <= 0 || dest === "none" ? { dest: "none" }
+    : dest === "new" ? { dest: "new", name: `Tài khoản ${d.institution}`, place: d.institution, amount: payoutAmount }
+    : { dest: "existing", holdingId: dest, amount: payoutAmount };
 
   const submit = async () => {
     if (!valid) return;
@@ -255,7 +269,7 @@ function CloseForm({ d, onClose, onConfirm }: { d: Deposit; onClose: () => void;
     const ok = await onConfirm(d, {
       ...rest, status: "closed", closeDate: date, closeType: s.early ? "early" : "matured",
       interest: gi || 0, tax: tax || 0, fee: fee || 0,
-    }, roll);
+    }, roll, payout);
     setBusy(false);
     if (ok) onClose();
   };
@@ -278,6 +292,16 @@ function CloseForm({ d, onClose, onConfirm }: { d: Deposit; onClose: () => void;
             <option value="all">Tái tục gốc + lãi</option>
           </select>
         </label>
+        {payoutAmount > 0 && (
+          <label className="f full">Tiền nhận về ({money(payoutAmount)}) chuyển vào
+            <select id="c_dest" value={dest} onChange={(e) => setDest(e.target.value)}>
+              {cashAccounts.map((h) => <option key={h.id} value={h.id}>{h.name}{h.place ? ` · ${h.place}` : ""} (đang có {money(h.qty)})</option>)}
+              <option value="new">+ Tạo tài khoản tiền mặt mới: Tài khoản {d.institution}</option>
+              <option value="none">Không ghi (tiền đã tiêu / chuyển đi nơi khác)</option>
+            </select>
+            <span className="hint">Để tổng tài sản không bị tụt: số tiền này cộng vào tài sản Tiền mặt ở tab Đầu tư.</span>
+          </label>
+        )}
       </div>
       <div className="calc">
         <div className="row"><span>Gửi {held} ngày · lãi gợi ý {s.early ? (d.tiers ? `(giữ lãi các bậc đã xong, bậc dở ${fmt2(d.earlyRate)}%)` : `(LS không kỳ hạn ${fmt2(d.earlyRate)}%)`) : ""}</span><span className="num">{money(s.gi)}</span></div>

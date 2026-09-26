@@ -1,12 +1,12 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Deposit, DepositInput, Holding, HoldingInput } from "@/lib/types.ts";
-import { dstr, fd, today } from "@/lib/calc.ts";
+import { dstr, fd, money, today } from "@/lib/calc.ts";
 import { api, ApiError, getToken, setToken, tg } from "@/lib/client.ts";
 import { ToastProvider, TipLayer, useToast } from "./ui.tsx";
 import { ApproveDialog, PairLogin } from "./pairing.tsx";
 import { Overview, Savings, Invest } from "./views.tsx";
-import { CloseDialog, DepositDialog, HoldingDialog, renewalDraft, type DepositDraft, type HoldingDraft, type Rollover } from "./dialogs.tsx";
+import { CloseDialog, DepositDialog, HoldingDialog, renewalDraft, type DepositDraft, type HoldingDraft, type Payout, type Rollover } from "./dialogs.tsx";
 
 type Auth =
   | { state: "checking" }
@@ -164,8 +164,26 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
     try { await api(`/api/deposits/${id}`, { method: "DELETE" }); setDeps((p) => (p || []).filter((d) => d.id !== id)); toast("Đã xoá sổ"); }
     catch (e) { onErr(e); }
   };
-  const confirmClose = async (d: Deposit, x: DepositInput, roll: Rollover) => {
+  const confirmClose = async (d: Deposit, x: DepositInput, roll: Rollover, payout: Payout) => {
     const ok = await saveDep(d.id, x);
+    if (ok && payout.dest !== "none") {
+      // Ghi tiền nhận về vào tài sản tiền mặt để tổng tài sản không bị hụt
+      try {
+        const date = x.closeDate || fd(today());
+        let r: Holding;
+        if (payout.dest === "existing") {
+          const h = (hold || []).find((z) => z.id === payout.holdingId);
+          if (!h) throw new Error("Không tìm thấy tài khoản tiền mặt");
+          const { id, ...rest } = h;
+          r = await api<Holding>(`/api/holdings/${id}`, { method: "PUT", json: { ...rest, qty: h.qty + payout.amount, cost: h.cost + payout.amount, priceDate: date } });
+          setHold((p) => (p || []).map((z) => (z.id === id ? r : z)));
+        } else {
+          r = await api<Holding>("/api/holdings", { method: "POST", json: { type: "cash", name: payout.name, place: payout.place, qty: payout.amount, unit: "₫", cost: payout.amount, price: 1, priceDate: date, priceSource: "", note: "Tạo khi tất toán sổ" } });
+          setHold((p) => [...(p || []), r]);
+        }
+        toast(`Đã cộng ${money(payout.amount)} vào ${r.name}`);
+      } catch (e) { onErr(e); }
+    }
     if (ok && roll !== "none") {
       setTimeout(() => { setDepDraft(renewalDraft(d, x, roll)); toast("Kiểm tra lãi suất mới rồi bấm Lưu"); }, 150);
     }
@@ -256,7 +274,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
 
       <datalist id="instList">{places.map((p) => <option key={p} value={p} />)}</datalist>
       <DepositDialog draft={depDraft} institutions={places} onClose={() => setDepDraft(null)} onSave={saveDep} onDelete={delDep} />
-      <CloseDialog deposit={closing} onClose={() => setClosing(null)} onConfirm={confirmClose} />
+      <CloseDialog deposit={closing} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setClosing(null)} onConfirm={confirmClose} />
       <ApproveDialog open={approve !== null} initialCode={approve || ""} onClose={() => setApprove(null)} toast={toast} />
       <HoldingDialog draft={holdDraft} places={places} onClose={() => setHoldDraft(null)} onSave={saveHold} onDelete={delHold} />
     </div>
