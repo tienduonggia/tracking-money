@@ -19,6 +19,9 @@ export function handler<A extends unknown[]>(fn: (req: Request, ...a: A) => Prom
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
       console.error(e);
+      if ((e as { code?: string }).code === "42P01") {
+        return json({ error: "Database chưa có bảng. Chạy `npm run db:migrate` với DATABASE_URL của production rồi thử lại." }, 500);
+      }
       return json({ error: "Lỗi máy chủ" }, 500);
     }
   };

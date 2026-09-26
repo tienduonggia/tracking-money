@@ -39,7 +39,7 @@ Chọn một trong hai:
 - **Neon (dễ nhất)**: Vercel project → tab **Storage** → *Create Database* → **Neon**. Vercel tự thêm `DATABASE_URL`.
 - **Supabase**: Project Settings → Database → Connection string → **Transaction pooler** (port 6543). Dán vào `DATABASE_URL`.
 
-Tạo bảng (chạy 1 lần, chạy lại không sao):
+Bảng được **tự tạo mỗi lần Vercel deploy** (script `vercel-build` chạy `scripts/migrate.mjs` trước `next build`). Muốn tạo tay thì chạy (chạy lại nhiều lần không sao):
 
 ```bash
 DATABASE_URL="postgres://..." npm run db:migrate

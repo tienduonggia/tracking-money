@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "vercel-build": "node scripts/migrate.mjs && next build",
     "start": "next start",
     "db:migrate": "node scripts/migrate.mjs",
     "test": "node --test --experimental-strip-types src/lib/*.test.ts",
