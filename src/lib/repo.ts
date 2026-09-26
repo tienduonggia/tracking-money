@@ -26,6 +26,7 @@ const toDeposit = (r: Row): Deposit => ({
   tax: n(r.tax),
   fee: n(r.fee),
   renewedFrom: (r.renewed_from as string) ?? null,
+  payout: r.payout === "cash" || r.payout === "none" ? r.payout : null,
 });
 
 const toHolding = (r: Row): Holding => ({
@@ -45,7 +46,7 @@ const toHolding = (r: Row): Holding => ({
 // Trả date dạng text để không lệch múi giờ
 type Sql = ReturnType<typeof sql>;
 const DEP_COLS = (s: Sql) => s`id, institution, label, principal, rate, tiers, term_months, open_date::text, maturity_date::text,
-  early_rate, tax_pct, note, status, close_date::text, close_type, interest, tax, fee, renewed_from`;
+  early_rate, tax_pct, note, status, close_date::text, close_type, interest, tax, fee, renewed_from, payout`;
 
 const depRow = (s: Sql, x: DepositInput) => ({
   institution: x.institution, label: x.label, principal: x.principal, rate: x.rate,
@@ -53,6 +54,7 @@ const depRow = (s: Sql, x: DepositInput) => ({
   open_date: x.openDate, maturity_date: x.maturityDate, early_rate: x.earlyRate, tax_pct: x.taxPct, note: x.note,
   status: x.status, close_date: x.closeDate, close_type: x.closeType, interest: x.interest, tax: x.tax, fee: x.fee,
   renewed_from: x.renewedFrom,
+  payout: x.payout ?? null,
 });
 const holdRow = (x: HoldingInput) => ({
   type: x.type, name: x.name, place: x.place, qty: x.qty, unit: x.unit, cost: x.cost, price: x.price,

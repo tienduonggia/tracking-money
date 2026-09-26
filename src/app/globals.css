@@ -205,3 +205,4 @@ a.btn{text-decoration:none;color:inherit}
 .tiers > .btn{justify-self:start}
 .pill.tier{background:var(--accent-soft);color:var(--accent)}
 .tier-now{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.panel.attn{border-color:var(--warn)}

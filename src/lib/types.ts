@@ -27,6 +27,7 @@ export interface Deposit {
   tax: number | null;
   fee: number | null;
   renewedFrom: string | null;
+  payout: "cash" | "none" | null; // tiền nhận về khi tất toán đã ghi chưa
 }
 
 export type HoldingType = "etf" | "stock" | "coin" | "gold" | "cash" | "other";

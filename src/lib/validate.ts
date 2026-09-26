@@ -70,6 +70,7 @@ export function parseDeposit(b: Record<string, unknown>): DepositInput {
     interest: status === "closed" ? optNum(b.interest, "Tiền lãi") ?? 0 : null,
     tax: status === "closed" ? optNum(b.tax, "Thuế") ?? 0 : null,
     fee: status === "closed" ? optNum(b.fee, "Phí") ?? 0 : null,
+    payout: status === "closed" && (b.payout === "cash" || b.payout === "none") ? b.payout : null,
     renewedFrom: typeof b.renewedFrom === "string" && /^[0-9a-f-]{36}$/i.test(b.renewedFrom) ? b.renewedFrom : null,
   };
 }

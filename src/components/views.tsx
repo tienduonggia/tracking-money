@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Deposit, Holding } from "@/lib/types.ts";
 import {
   TYPES, TYPE_ORDER, accrued, currentSegment, days, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
-  termDays, totals, yearStats, fmt, fd,
+  termDays, totals, yearStats, fmt, fd, pendingPayouts,
 } from "@/lib/calc.ts";
 
 type Totals = ReturnType<typeof totals>;
@@ -27,9 +27,11 @@ export function RangeSelect({ id, value, years, onChange }: { id: string; value:
 }
 
 /* ======================= Overview ======================= */
-export function Overview({ deps, hold, t, range, years, setRange, onCloseDep }: {
-  deps: Deposit[]; hold: Holding[]; t: number; range: string; years: number[]; setRange: (r: string) => void; onCloseDep: (d: Deposit) => void;
+export function Overview({ deps, hold, t, range, years, setRange, onCloseDep, onPayout }: {
+  deps: Deposit[]; hold: Holding[]; t: number; range: string; years: number[]; setRange: (r: string) => void;
+  onCloseDep: (d: Deposit) => void; onPayout: (d: Deposit) => void;
 }) {
+  const pending = pendingPayouts(deps);
   const T = totals(deps, hold, t);
   const Y = yearStats(deps, range, t);
   const yNow = new Date(t).getUTCFullYear();
@@ -58,6 +60,24 @@ export function Overview({ deps, hold, t, range, years, setRange, onCloseDep }: 
             d={<span className={pl >= 0 ? "pos" : "neg"}>{signed(pl)}{T.invCost ? ` (${pl >= 0 ? "+" : ""}${fmt2((pl / T.invCost) * 100)}%)` : ""}</span>} />
         </div>
       </div>
+      {pending.length > 0 && (
+        <div className="panel attn">
+          <h2>{pending.length} sổ đã tất toán chưa ghi tiền nhận về
+            <span className="sub">· {money(pending.reduce((s, d) => s + d.principal + netClosed(d), 0))} chưa có trong tổng tài sản</span></h2>
+          <div className="list">
+            {pending.map((d) => (
+              <div className="li" key={d.id}>
+                <span className="pill warn">Chưa ghi</span>
+                <div>
+                  <div className="t">{d.institution}{d.label ? ` · ${d.label}` : ""}</div>
+                  <div className="s num">Tất toán {dstr(d.closeDate)} · nhận về {money(d.principal + netClosed(d))}</div>
+                </div>
+                <button className="btn small" onClick={() => onPayout(d)}>Ghi tiền về</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid3">
         <div className="panel">
           <h2>Phân bổ tài sản</h2>
@@ -187,10 +207,11 @@ function MonthlyBars({ Y }: { Y: YStats }) {
 }
 
 /* ======================= Savings ======================= */
-export function Savings({ deps, t, range, years, setRange, onEdit, onCloseDep }: {
+export function Savings({ deps, t, range, years, setRange, onEdit, onCloseDep, onPayout }: {
   deps: Deposit[]; t: number; range: string; years: number[]; setRange: (r: string) => void;
-  onEdit: (d: Deposit) => void; onCloseDep: (d: Deposit) => void;
+  onEdit: (d: Deposit) => void; onCloseDep: (d: Deposit) => void; onPayout: (d: Deposit) => void;
 }) {
+  const pendingIds = new Set(pendingPayouts(deps).map((d) => d.id));
   const [status, setStatus] = useState<"active" | "closed">("active");
   const [inst, setInst] = useState("");
   const Y = yearStats(deps, range, t);
@@ -222,7 +243,7 @@ export function Savings({ deps, t, range, years, setRange, onEdit, onCloseDep }:
         </select>
         <span className="note">{list.length} sổ{status === "active" ? ` · gốc ${money(list.reduce((s, d) => s + d.principal, 0))}` : ""}</span>
       </div>
-      {status === "active" ? <ActiveBooks list={list} t={t} onEdit={onEdit} onCloseDep={onCloseDep} /> : <ClosedTable list={list} onEdit={onEdit} />}
+      {status === "active" ? <ActiveBooks list={list} t={t} onEdit={onEdit} onCloseDep={onCloseDep} /> : <ClosedTable list={list} onEdit={onEdit} pendingIds={pendingIds} onPayout={onPayout} />}
     </section>
   );
 }
@@ -278,7 +299,9 @@ function ActiveBooks({ list, t, onEdit, onCloseDep }: { list: Deposit[]; t: numb
   );
 }
 
-function ClosedTable({ list, onEdit }: { list: Deposit[]; onEdit: (d: Deposit) => void }) {
+function ClosedTable({ list, onEdit, pendingIds, onPayout }: {
+  list: Deposit[]; onEdit: (d: Deposit) => void; pendingIds: Set<string>; onPayout: (d: Deposit) => void;
+}) {
   const sorted = [...list].sort((a, b) => pd(b.closeDate) - pd(a.closeDate));
   const sum = (f: (d: Deposit) => number) => sorted.reduce((s, d) => s + f(d), 0);
   return (
@@ -300,7 +323,10 @@ function ClosedTable({ list, onEdit }: { list: Deposit[]; onEdit: (d: Deposit) =
                 <td className="r num">{money(d.fee)}</td>
                 <td className="r num"><b>{money(netClosed(d))}</b></td>
                 <td className="r num">{fmt2(eff)}%/năm</td>
-                <td className="r"><button className="btn small ghost" onClick={() => onEdit(d)}>Sửa</button></td>
+                <td className="r">
+                  {pendingIds.has(d.id) && <button className="btn small" onClick={() => onPayout(d)}>Ghi tiền về</button>}
+                  <button className="btn small ghost" onClick={() => onEdit(d)}>Sửa</button>
+                </td>
               </tr>
             );
           }) : <tr><td colSpan={10} className="empty">Chưa có sổ nào tất toán.</td></tr>}

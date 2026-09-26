@@ -7,7 +7,7 @@ import type { Deposit } from "./types.ts";
 const dep = (o: Partial<Deposit>): Deposit => ({
   id: "x", institution: "MB", label: "", principal: 100_000_000, rate: 5, termMonths: 12, openDate: "2025-01-01",
   maturityDate: "2026-01-01", earlyRate: 0.5, taxPct: 0, note: "", status: "active", closeDate: null, closeType: null,
-  interest: null, tax: null, fee: null, renewedFrom: null, tiers: null, ...o,
+  interest: null, tax: null, fee: null, renewedFrom: null, tiers: null, payout: null, ...o,
 });
 
 test("addMonths kẹp cuối tháng", () => {
@@ -123,4 +123,13 @@ test("Toàn bộ + chia lãi sổ bậc thang đã tất toán theo bậc", () =
   // sổ cố định vẫn chia đều theo ngày
   const flat = dep({ status: "closed", openDate: "2025-12-02", closeDate: "2026-01-31", closeType: "matured", interest: 600_000 });
   assert.equal(Math.round(yearStats([flat], "2026", t).accrual), 300_000);
+});
+
+import { pendingPayouts } from "./calc.ts";
+test("pendingPayouts: chỉ sổ cũ đã tất toán, chưa ghi, không tái tục", () => {
+  const a = dep({ id: "a", status: "closed", closeDate: "2026-01-01", closeType: "matured", interest: 1 });
+  const b = dep({ id: "b", status: "closed", closeDate: "2026-01-01", closeType: "matured", interest: 1, payout: "cash" });
+  const c = dep({ id: "c", status: "closed", closeDate: "2026-01-01", closeType: "matured", interest: 1 });
+  const cNew = dep({ id: "c2", renewedFrom: "c" });
+  assert.deepEqual(pendingPayouts([a, b, c, cNew, dep({ id: "act" })]).map((d) => d.id), ["a"]);
 });

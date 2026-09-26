@@ -99,6 +99,7 @@ function DepositForm({ draft, institutions, onClose, onSave, onDelete }: {
       openDate: f.openDate, maturityDate, earlyRate: Number(f.earlyRate) || 0, taxPct, note: f.note.trim(),
       status: draft.status ?? "active", closeDate: draft.closeDate ?? null, closeType: draft.closeType ?? null,
       interest: draft.interest ?? null, tax: draft.tax ?? null, fee: draft.fee ?? null, renewedFrom: draft.renewedFrom ?? null,
+      payout: draft.payout ?? null,
     };
     const ok = await onSave(draft.id, base);
     setBusy(false);
@@ -220,6 +221,77 @@ export function CloseDialog({ deposit, cashAccounts, onClose, onConfirm }: {
   );
 }
 
+/* ---------- Chọn nơi ghi tiền nhận về (dùng khi tất toán và khi ghi bù sổ cũ) ---------- */
+function defaultDest(d: Deposit, cashAccounts: Holding[]) {
+  const same = cashAccounts.find((h) => h.place.toLowerCase() === d.institution.toLowerCase());
+  return same?.id ?? (cashAccounts[0]?.id || "new");
+}
+function toPayout(d: Deposit, dest: string, amount: number): Payout {
+  if (amount <= 0 || dest === "none") return { dest: "none" };
+  if (dest === "new") return { dest: "new", name: `Tài khoản ${d.institution}`, place: d.institution, amount };
+  return { dest: "existing", holdingId: dest, amount };
+}
+function DestSelect({ id, d, value, onChange, cashAccounts, noneLabel }: {
+  id: string; d: Deposit; value: string; onChange: (v: string) => void; cashAccounts: Holding[]; noneLabel: string;
+}) {
+  return (
+    <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+      {cashAccounts.map((h) => <option key={h.id} value={h.id}>{h.name}{h.place ? ` · ${h.place}` : ""} (đang có {money(h.qty)})</option>)}
+      <option value="new">+ Tạo tài khoản tiền mặt mới: Tài khoản {d.institution}</option>
+      <option value="none">{noneLabel}</option>
+    </select>
+  );
+}
+
+/** Ghi bù tiền nhận về cho sổ đã tất toán trước khi có tính năng. */
+export function PayoutDialog({ deposit, cashAccounts, onClose, onConfirm }: {
+  deposit: Deposit | null; cashAccounts: Holding[]; onClose: () => void;
+  onConfirm: (d: Deposit, payout: Payout) => Promise<boolean>;
+}) {
+  return (
+    <Modal open={!!deposit} onClose={onClose}>
+      {deposit && <PayoutForm key={deposit.id} d={deposit} cashAccounts={cashAccounts} onClose={onClose} onConfirm={onConfirm} />}
+    </Modal>
+  );
+}
+function PayoutForm({ d, cashAccounts, onClose, onConfirm }: {
+  d: Deposit; cashAccounts: Holding[]; onClose: () => void; onConfirm: (d: Deposit, payout: Payout) => Promise<boolean>;
+}) {
+  const received = d.principal + netClosed(d);
+  const [amount, setAmount] = useState<number | null>(Math.round(received));
+  const [dest, setDest] = useState(defaultDest(d, cashAccounts));
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    const ok = await onConfirm(d, toPayout(d, dest, amount || 0));
+    setBusy(false);
+    if (ok) onClose();
+  };
+  return (
+    <>
+      <h3>Ghi tiền nhận về</h3>
+      <div className="note">{d.institution}{d.label ? ` · ${d.label}` : ""} · tất toán {dstr(d.closeDate)} · nhận về {money(received)}</div>
+      <div className="fields">
+        <label className="f full">Tiền nhận về hiện còn đâu?
+          <DestSelect id="p_dest" d={d} value={dest} onChange={setDest} cashAccounts={cashAccounts} noneLabel="Đã tiêu / đã chuyển sang sổ hoặc tài sản khác (không ghi)" />
+        </label>
+        {dest !== "none" && (
+          <label className="f full">Số tiền cộng vào (₫) <span className="hint">sửa nếu đã tiêu bớt một phần</span>
+            <MoneyInput id="p_amount" value={amount} onChange={setAmount} />
+          </label>
+        )}
+      </div>
+      <p className="note" style={{ margin: 0 }}>
+        {dest === "none" ? "Sổ sẽ được đánh dấu đã xử lý, tổng tài sản không đổi." : `Tổng tài sản sẽ tăng ${money(amount || 0)} ở mục Tiền mặt.`}
+      </p>
+      <div className="dlg-actions">
+        <button type="button" className="btn" onClick={onClose}>Huỷ</button>
+        <button type="button" className="btn primary" disabled={busy || (dest !== "none" && !(amount && amount > 0))} onClick={submit}>{busy ? "Đang lưu…" : dest === "none" ? "Đánh dấu đã xử lý" : "Ghi vào tiền mặt"}</button>
+      </div>
+    </>
+  );
+}
+
 function suggested(d: Deposit, date: string) {
   const c = pd(date);
   const early = c < pd(d.maturityDate);
@@ -240,8 +312,7 @@ function CloseForm({ d, cashAccounts, onClose, onConfirm }: {
   const [fee, setFee] = useState<number | null>(0);
   const [roll, setRoll] = useState<Rollover>("none");
   // Mặc định chuyển vào tài khoản tiền mặt cùng nơi gửi nếu có, không thì tạo mới
-  const sameInst = cashAccounts.find((h) => h.place.toLowerCase() === d.institution.toLowerCase());
-  const [dest, setDest] = useState<string>(sameInst?.id ?? (cashAccounts[0]?.id || "new"));
+  const [dest, setDest] = useState<string>(defaultDest(d, cashAccounts));
   const [busy, setBusy] = useState(false);
 
   const changeDate = (v: string) => {
@@ -257,9 +328,7 @@ function CloseForm({ d, cashAccounts, onClose, onConfirm }: {
   const net = (gi || 0) - (tax || 0) - (fee || 0);
   // Tiền thực sự về tài khoản: không tái tục = gốc + lãi ròng; tái tục gốc = lãi ròng; tái tục cả = 0
   const payoutAmount = roll === "none" ? d.principal + net : roll === "principal" ? net : 0;
-  const payout: Payout = payoutAmount <= 0 || dest === "none" ? { dest: "none" }
-    : dest === "new" ? { dest: "new", name: `Tài khoản ${d.institution}`, place: d.institution, amount: payoutAmount }
-    : { dest: "existing", holdingId: dest, amount: payoutAmount };
+  const payout = toPayout(d, dest, payoutAmount);
 
   const submit = async () => {
     if (!valid) return;
@@ -268,7 +337,7 @@ function CloseForm({ d, cashAccounts, onClose, onConfirm }: {
     void _id;
     const ok = await onConfirm(d, {
       ...rest, status: "closed", closeDate: date, closeType: s.early ? "early" : "matured",
-      interest: gi || 0, tax: tax || 0, fee: fee || 0,
+      interest: gi || 0, tax: tax || 0, fee: fee || 0, payout: payout.dest === "none" ? "none" : "cash",
     }, roll, payout);
     setBusy(false);
     if (ok) onClose();
@@ -294,11 +363,7 @@ function CloseForm({ d, cashAccounts, onClose, onConfirm }: {
         </label>
         {payoutAmount > 0 && (
           <label className="f full">Tiền nhận về ({money(payoutAmount)}) chuyển vào
-            <select id="c_dest" value={dest} onChange={(e) => setDest(e.target.value)}>
-              {cashAccounts.map((h) => <option key={h.id} value={h.id}>{h.name}{h.place ? ` · ${h.place}` : ""} (đang có {money(h.qty)})</option>)}
-              <option value="new">+ Tạo tài khoản tiền mặt mới: Tài khoản {d.institution}</option>
-              <option value="none">Không ghi (tiền đã tiêu / chuyển đi nơi khác)</option>
-            </select>
+            <DestSelect id="c_dest" d={d} value={dest} onChange={setDest} cashAccounts={cashAccounts} noneLabel="Không ghi (tiền đã tiêu / chuyển đi nơi khác)" />
             <span className="hint">Để tổng tài sản không bị tụt: số tiền này cộng vào tài sản Tiền mặt ở tab Đầu tư.</span>
           </label>
         )}

@@ -71,7 +71,7 @@ Trong @BotFather:
 
 1. `/setdomain` → chọn bot → nhập `so-tai-san.vercel.app` (bắt buộc cho nút đăng nhập trên website).
 2. `/mybots` → chọn bot → *Bot Settings* → *Menu Button* → nhập URL `https://so-tai-san.vercel.app` và tên nút, ví dụ `Sổ Tài Sản`.
-3. (Tuỳ chọn) `/newapp` để có link mở thẳng dạng `t.me/<bot>/<app>`.
+3. (Tuỳ chọn, nên làm) `/newapp` → **chọn bot đã tạo** → tên, mô tả, ảnh 640×360, GIF `/empty`, URL app, **short name** (vd `app`). Đặt `NEXT_PUBLIC_TELEGRAM_APP_SHORTNAME=app` trên Vercel rồi Redeploy: trang đăng nhập bằng mã sẽ có nút mở thẳng Mini App, tự điền mã.
 
 Mở bot trong Telegram → bấm **Start** (để bot được phép nhắn nhắc đáo hạn) → bấm nút menu.
 Lần đầu app báo *"Tài khoản Telegram này chưa được phép. Thêm 123456789…"*. Copy số đó vào `ALLOWED_TELEGRAM_IDS` trên Vercel → **Redeploy**.

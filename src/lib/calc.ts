@@ -156,6 +156,12 @@ export const PRESETS: { key: string; label: string; institution: string; tiers: 
   },
 ];
 
+/** Sổ đã tất toán mà tiền nhận về chưa được ghi (sổ cũ trước khi có tính năng, không phải sổ đã tái tục). */
+export function pendingPayouts(deps: Deposit[]) {
+  const renewed = new Set(deps.map((d) => d.renewedFrom).filter(Boolean));
+  return deps.filter((d) => d.status === "closed" && d.payout === null && !renewed.has(d.id));
+}
+
 export function rangeBounds(r: string, t: number): [number, number, string] {
   if (r === "all") return [-8.64e15, 8.64e15, "toàn bộ"];
   if (r === "12m") {

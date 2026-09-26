@@ -27,6 +27,8 @@ create table if not exists deposits (
 );
 -- Lãi bậc thang: [{"upToMonth":3,"rate":6},{"upToMonth":6,"rate":6.6},...]; null = lãi cố định
 alter table deposits add column if not exists tiers jsonb;
+-- Tiền nhận về khi tất toán: 'cash' = đã cộng vào tài sản tiền mặt, 'none' = không ghi, null = sổ cũ chưa xử lý
+alter table deposits add column if not exists payout text;
 
 create index if not exists deposits_owner_idx on deposits (owner_id, status, maturity_date);
 

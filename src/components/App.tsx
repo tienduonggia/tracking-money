@@ -6,7 +6,7 @@ import { api, ApiError, getToken, setToken, tg } from "@/lib/client.ts";
 import { ToastProvider, TipLayer, useToast } from "./ui.tsx";
 import { ApproveDialog, PairLogin } from "./pairing.tsx";
 import { Overview, Savings, Invest } from "./views.tsx";
-import { CloseDialog, DepositDialog, HoldingDialog, renewalDraft, type DepositDraft, type HoldingDraft, type Payout, type Rollover } from "./dialogs.tsx";
+import { CloseDialog, DepositDialog, HoldingDialog, PayoutDialog, renewalDraft, type DepositDraft, type HoldingDraft, type Payout, type Rollover } from "./dialogs.tsx";
 
 type Auth =
   | { state: "checking" }
@@ -117,6 +117,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
   const [holdDraft, setHoldDraft] = useState<HoldingDraft | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [approve, setApprove] = useState<string | null>(null);
+  const [payoutFor, setPayoutFor] = useState<Deposit | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const t = today();
 
@@ -164,12 +165,10 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
     try { await api(`/api/deposits/${id}`, { method: "DELETE" }); setDeps((p) => (p || []).filter((d) => d.id !== id)); toast("Đã xoá sổ"); }
     catch (e) { onErr(e); }
   };
-  const confirmClose = async (d: Deposit, x: DepositInput, roll: Rollover, payout: Payout) => {
-    const ok = await saveDep(d.id, x);
-    if (ok && payout.dest !== "none") {
-      // Ghi tiền nhận về vào tài sản tiền mặt để tổng tài sản không bị hụt
+  /** Cộng tiền nhận về vào tài sản tiền mặt để tổng tài sản không bị hụt. */
+  const addToCash = async (payout: Payout, date: string) => {
+    if (payout.dest === "none") return true;
       try {
-        const date = x.closeDate || fd(today());
         let r: Holding;
         if (payout.dest === "existing") {
           const h = (hold || []).find((z) => z.id === payout.holdingId);
@@ -182,12 +181,22 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
           setHold((p) => [...(p || []), r]);
         }
         toast(`Đã cộng ${money(payout.amount)} vào ${r.name}`);
-      } catch (e) { onErr(e); }
-    }
+        return true;
+      } catch (e) { onErr(e); return false; }
+  };
+  const confirmClose = async (d: Deposit, x: DepositInput, roll: Rollover, payout: Payout) => {
+    const ok = await saveDep(d.id, x);
+    if (ok) await addToCash(payout, x.closeDate || fd(today()));
     if (ok && roll !== "none") {
       setTimeout(() => { setDepDraft(renewalDraft(d, x, roll)); toast("Kiểm tra lãi suất mới rồi bấm Lưu"); }, 150);
     }
     return ok;
+  };
+  /** Ghi bù cho sổ đã tất toán trước đây: cộng tiền mặt trước, rồi đánh dấu sổ đã xử lý. */
+  const recordPayout = async (d: Deposit, payout: Payout) => {
+    if (!(await addToCash(payout, d.closeDate || fd(today())))) return false;
+    const { id, ...rest } = d;
+    return saveDep(id, { ...rest, payout: payout.dest === "none" ? "none" : "cash" });
   };
   const saveHold = async (id: string | undefined, x: HoldingInput) => {
     try {
@@ -253,8 +262,8 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
 
       {deps === null || hold === null ? <div className="skeleton">Đang tải dữ liệu…</div> : (
         <>
-          {tab === "overview" && <Overview deps={deps} hold={hold} t={t} range={range} years={years} setRange={setRange} onCloseDep={setClosing} />}
-          {tab === "savings" && <Savings deps={deps} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} />}
+          {tab === "overview" && <Overview deps={deps} hold={hold} t={t} range={range} years={years} setRange={setRange} onCloseDep={setClosing} onPayout={setPayoutFor} />}
+          {tab === "savings" && <Savings deps={deps} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} onPayout={setPayoutFor} />}
           {tab === "invest" && <Invest hold={hold} deps={deps} t={t} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
         </>
       )}
@@ -274,6 +283,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
 
       <datalist id="instList">{places.map((p) => <option key={p} value={p} />)}</datalist>
       <DepositDialog draft={depDraft} institutions={places} onClose={() => setDepDraft(null)} onSave={saveDep} onDelete={delDep} />
+      <PayoutDialog deposit={payoutFor} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setPayoutFor(null)} onConfirm={recordPayout} />
       <CloseDialog deposit={closing} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setClosing(null)} onConfirm={confirmClose} />
       <ApproveDialog open={approve !== null} initialCode={approve || ""} onClose={() => setApprove(null)} toast={toast} />
       <HoldingDialog draft={holdDraft} places={places} onClose={() => setHoldDraft(null)} onSave={saveHold} onDelete={delHold} />
