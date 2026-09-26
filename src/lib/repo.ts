@@ -12,6 +12,7 @@ const toDeposit = (r: Row): Deposit => ({
   label: r.label as string,
   principal: Number(r.principal),
   rate: Number(r.rate),
+  tiers: Array.isArray(r.tiers) && r.tiers.length ? (r.tiers as Deposit["tiers"]) : null,
   termMonths: Number(r.term_months),
   openDate: d(r.open_date)!,
   maturityDate: d(r.maturity_date)!,
@@ -43,11 +44,12 @@ const toHolding = (r: Row): Holding => ({
 
 // Trả date dạng text để không lệch múi giờ
 type Sql = ReturnType<typeof sql>;
-const DEP_COLS = (s: Sql) => s`id, institution, label, principal, rate, term_months, open_date::text, maturity_date::text,
+const DEP_COLS = (s: Sql) => s`id, institution, label, principal, rate, tiers, term_months, open_date::text, maturity_date::text,
   early_rate, tax_pct, note, status, close_date::text, close_type, interest, tax, fee, renewed_from`;
 
-const depRow = (x: DepositInput) => ({
-  institution: x.institution, label: x.label, principal: x.principal, rate: x.rate, term_months: x.termMonths,
+const depRow = (s: Sql, x: DepositInput) => ({
+  institution: x.institution, label: x.label, principal: x.principal, rate: x.rate,
+  tiers: x.tiers ? s.json(x.tiers as unknown as Parameters<Sql["json"]>[0]) : null, term_months: x.termMonths,
   open_date: x.openDate, maturity_date: x.maturityDate, early_rate: x.earlyRate, tax_pct: x.taxPct, note: x.note,
   status: x.status, close_date: x.closeDate, close_type: x.closeType, interest: x.interest, tax: x.tax, fee: x.fee,
   renewed_from: x.renewedFrom,
@@ -65,13 +67,13 @@ export async function listDeposits(owner: number): Promise<Deposit[]> {
 }
 export async function createDeposit(owner: number, x: DepositInput): Promise<Deposit> {
   const s = sql();
-  const row = { ...depRow(x), owner_id: owner };
+  const row = { ...depRow(s, x), owner_id: owner };
   const [r] = await s`insert into deposits ${s(row)} returning ${DEP_COLS(s)}`;
   return toDeposit(r);
 }
 export async function updateDeposit(owner: number, id: string, x: DepositInput): Promise<Deposit | null> {
   const s = sql();
-  const [r] = await s`update deposits set ${s(depRow(x))}, updated_at = now()
+  const [r] = await s`update deposits set ${s(depRow(s, x))}, updated_at = now()
     where id = ${id} and owner_id = ${owner} returning ${DEP_COLS(s)}`;
   return r ? toDeposit(r) : null;
 }
@@ -128,7 +130,7 @@ export async function depositsDueWithin(daysAhead: number, todayStr: string) {
 /** Import từ bản xuất JSON (của artifact cũ hoặc của app này). Chạy trong 1 transaction. */
 export async function importAll(owner: number, deps: DepositInput[], holds: HoldingInput[]) {
   return sql().begin(async (tx) => {
-    for (const x of deps) await tx`insert into deposits ${tx({ ...depRow({ ...x, renewedFrom: null }), owner_id: owner })}`;
+    for (const x of deps) await tx`insert into deposits ${tx({ ...depRow(tx as unknown as Sql, { ...x, renewedFrom: null }), owner_id: owner })}`;
     for (const x of holds) await tx`insert into holdings ${tx({ ...holdRow(x), owner_id: owner })}`;
     return { deposits: deps.length, holdings: holds.length };
   });

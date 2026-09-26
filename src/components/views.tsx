@@ -2,8 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Deposit, Holding } from "@/lib/types.ts";
 import {
-  TYPES, TYPE_ORDER, accrued, days, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
-  termDays, totals, yearStats, fmt,
+  TYPES, TYPE_ORDER, accrued, currentSegment, days, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
+  termDays, totals, yearStats, fmt, fd,
 } from "@/lib/calc.ts";
 
 type Totals = ReturnType<typeof totals>;
@@ -11,6 +11,7 @@ type YStats = ReturnType<typeof yearStats>;
 
 function Pill({ left }: { left: number }) {
   if (left < 0) return <span className="pill bad">Quá hạn {-left} ngày</span>;
+  if (left === 0) return <span className="pill warn">Đáo hạn hôm nay</span>;
   if (left <= 7) return <span className="pill warn">Còn {left} ngày</span>;
   return <span className="pill mute">Còn {left} ngày</span>;
 }
@@ -237,6 +238,7 @@ function ActiveBooks({ list, t, onEdit, onCloseDep }: { list: Deposit[]; t: numb
         const left = days(t, pd(d.maturityDate));
         const pct = Math.min(100, Math.max(0, (days(pd(d.openDate), t) / termDays(d)) * 100));
         const g = expGross(d), tax = (g * (d.taxPct || 0)) / 100;
+        const cur = d.tiers ? currentSegment(d, t) : null;
         return (
           <article className="book" key={d.id}>
             <div className="head">
@@ -245,11 +247,19 @@ function ActiveBooks({ list, t, onEdit, onCloseDep }: { list: Deposit[]; t: numb
             </div>
             <div className="amt num">{money(d.principal)}</div>
             <dl className="num">
-              <div><dt>Lãi suất · kỳ hạn</dt><dd>{fmt2(d.rate)}% · {d.termMonths ? `${d.termMonths} tháng` : `${termDays(d)} ngày`}</dd></div>
+              <div><dt>{d.tiers ? "Bậc thang · bình quân" : "Lãi suất · kỳ hạn"}</dt><dd>{fmt2(d.rate)}% · {d.termMonths ? `${d.termMonths} tháng` : `${termDays(d)} ngày`}</dd></div>
               <div><dt>Lãi dồn tích</dt><dd>{money(accrued(d, t))}</dd></div>
               <div><dt>Lãi dự kiến khi đáo hạn</dt><dd>{money(g - tax)}</dd></div>
               <div><dt>Nếu rút hôm nay</dt><dd>{money(earlyInterest(d, t) * (1 - (d.taxPct || 0) / 100))}</dd></div>
             </dl>
+            {cur && (
+              <div className="tier-now">
+                <span className="pill tier">Bậc {cur.index + 1}/{cur.count} · {fmt2(cur.seg.rate)}%</span>
+                {cur.index + 1 < cur.count
+                  ? <span className="note num">Lên bậc {fmt2(d.tiers![cur.index + 1].rate)}% vào {dstr(fd(cur.seg.end))} (còn {days(t, cur.seg.end)} ngày)</span>
+                  : <span className="note">Bậc cuối</span>}
+              </div>
+            )}
             <div>
               <div className="progress"><i style={{ width: `${pct}%` }} /></div>
               <div className="terms num"><span>{dstr(d.openDate)}</span><span>{dstr(d.maturityDate)}</span></div>
@@ -282,7 +292,7 @@ function ClosedTable({ list, onEdit }: { list: Deposit[]; onEdit: (d: Deposit) =
                 <td>{d.institution}<div className="s">{d.label}</div></td>
                 <td className="num">{dstr(d.openDate)} → {dstr(d.closeDate)}<div className="s">{dd} ngày · {d.closeType === "early" ? <span className="pill bad">Rút trước hạn</span> : "đúng hạn"}</div></td>
                 <td className="r num">{money(d.principal)}</td>
-                <td className="r num">{fmt2(d.rate)}%</td>
+                <td className="r num">{fmt2(d.rate)}%{d.tiers ? <div className="s">bậc thang</div> : null}</td>
                 <td className="r num">{money(d.interest)}</td>
                 <td className="r num">{money(d.tax)}</td>
                 <td className="r num">{money(d.fee)}</td>

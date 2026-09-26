@@ -1,5 +1,6 @@
 // Validate & chuẩn hoá input từ client. Thuần TS, test được độc lập.
-import type { DepositInput, HoldingInput, HoldingType } from "./types.ts";
+import type { DepositInput, HoldingInput, HoldingType, Tier } from "./types.ts";
+import { addMonths, effectiveRate } from "./calc.ts";
 
 export class ValidationError extends Error {}
 
@@ -19,24 +20,45 @@ const date = (v: unknown, field: string) => {
 };
 const optDate = (v: unknown, field: string) => (v === null || v === undefined || v === "" ? null : date(v, field));
 
+/** Bậc lãi: 1–12 bậc, mốc tháng tăng dần (số nguyên 1–600), lãi 0–100. */
+export function parseTiers(v: unknown): Tier[] | null {
+  if (v === null || v === undefined || (Array.isArray(v) && v.length === 0)) return null;
+  if (!Array.isArray(v) || v.length > 12) throw new ValidationError("Bậc lãi không hợp lệ (tối đa 12 bậc)");
+  let prev = 0;
+  return v.map((t, i) => {
+    const r = (t ?? {}) as Record<string, unknown>;
+    const upToMonth = Number(r.upToMonth);
+    if (!Number.isInteger(upToMonth) || upToMonth <= prev || upToMonth > 600) throw new ValidationError(`Bậc ${i + 1}: mốc tháng phải là số nguyên lớn hơn bậc trước`);
+    prev = upToMonth;
+    return { upToMonth, rate: num(r.rate, `Bậc ${i + 1}: lãi suất`, { max: 100 }) };
+  });
+}
+
 export function parseDeposit(b: Record<string, unknown>): DepositInput {
   const institution = str(b.institution, 100);
   if (!institution) throw new ValidationError("Thiếu nơi gửi");
   const principal = Math.round(num(b.principal, "Số tiền gốc", { min: 1 }));
   const openDate = date(b.openDate, "Ngày gửi");
-  const maturityDate = date(b.maturityDate, "Ngày đáo hạn");
+  const tiers = parseTiers(b.tiers);
+  // Sổ bậc thang: kỳ hạn = mốc cuối, ngày đáo hạn suy ra từ ngày gửi
+  const maturityDate = tiers ? addMonths(openDate, tiers[tiers.length - 1].upToMonth) : date(b.maturityDate, "Ngày đáo hạn");
   if (maturityDate <= openDate) throw new ValidationError("Ngày đáo hạn phải sau ngày gửi");
   const status = b.status === "closed" ? "closed" : "active";
   const closeDate = optDate(b.closeDate, "Ngày tất toán");
   const closeType = b.closeType === "early" || b.closeType === "matured" ? b.closeType : null;
   if (status === "closed" && (!closeDate || !closeType)) throw new ValidationError("Sổ đã tất toán cần ngày và loại tất toán");
   if (closeDate && closeDate < openDate) throw new ValidationError("Ngày tất toán phải sau ngày gửi");
+  const termMonths = tiers ? tiers[tiers.length - 1].upToMonth : Math.round(num(b.termMonths ?? 0, "Kỳ hạn", { max: 600 }));
+  const rate = tiers
+    ? Math.round(effectiveRate({ principal, rate: 0, openDate, maturityDate, tiers }) * 1000) / 1000
+    : num(b.rate, "Lãi suất", { max: 100 });
   return {
     institution,
     label: str(b.label, 100),
     principal,
-    rate: num(b.rate, "Lãi suất", { max: 100 }),
-    termMonths: Math.round(num(b.termMonths ?? 0, "Kỳ hạn", { max: 600 })),
+    rate,
+    tiers,
+    termMonths,
     openDate,
     maturityDate,
     earlyRate: num(b.earlyRate ?? 0.5, "Lãi không kỳ hạn", { max: 100 }),

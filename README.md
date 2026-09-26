@@ -98,6 +98,11 @@ npm test          # unit test: tính lãi, validate, xác thực chữ ký Teleg
 npm run typecheck
 ```
 
+## Lãi bậc thang (Topi Tích luỹ linh hoạt…)
+
+Khi thêm sổ, chọn **Kiểu lãi → Mẫu: Topi** (hoặc *Bậc thang tự nhập*). Mỗi bậc áp lãi suất riêng theo số ngày thực tế của giai đoạn;
+rút trước hạn giữ đủ lãi các bậc đã xong, phần ngày của bậc đang dở tính lãi không kỳ hạn. Cột `rate` lưu lãi bình quân nếu giữ đủ kỳ.
+
 ## Ghi chú
 
 - **Cron**: Vercel Hobby cho chạy 1 lần/ngày và có thể lệch trong khung 1 giờ. Chạy tay: `curl -H "Authorization: Bearer $CRON_SECRET" https://<domain>/api/cron/daily`.

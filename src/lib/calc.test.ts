@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addMonths, accrued, expGross, pd, today, yearStats, accrualInRange } from "./calc.ts";
+import { addMonths, accrued, days, expGross, pd, today, yearStats, accrualInRange } from "./calc.ts";
 import { parseDeposit, parseHolding, ValidationError } from "./validate.ts";
 import type { Deposit } from "./types.ts";
 
 const dep = (o: Partial<Deposit>): Deposit => ({
   id: "x", institution: "MB", label: "", principal: 100_000_000, rate: 5, termMonths: 12, openDate: "2025-01-01",
   maturityDate: "2026-01-01", earlyRate: 0.5, taxPct: 0, note: "", status: "active", closeDate: null, closeType: null,
-  interest: null, tax: null, fee: null, renewedFrom: null, ...o,
+  interest: null, tax: null, fee: null, renewedFrom: null, tiers: null, ...o,
 });
 
 test("addMonths kẹp cuối tháng", () => {
@@ -61,4 +61,51 @@ test("validate holding: cash chuẩn hoá, nguồn giá", () => {
   assert.equal(c.cost, 15_000_000);
   assert.throws(() => parseHolding({ type: "coin", name: "BTC", qty: 1, priceSource: "http://evil" }), ValidationError);
   assert.equal(parseHolding({ type: "coin", name: "BTC", qty: 0.1, priceSource: "coingecko:bitcoin" }).priceSource, "coingecko:bitcoin");
+});
+
+/* ---------- lãi bậc thang (Topi) ---------- */
+import { PRESETS, earlyInterest, currentSegment, effectiveRate, segments } from "./calc.ts";
+import { parseTiers } from "./validate.ts";
+
+const topi = (principal: number, openDate: string) => {
+  const tiers = PRESETS[0].tiers;
+  return dep({ principal, openDate, maturityDate: addMonths(openDate, 12), termMonths: 12, tiers, rate: 0, earlyRate: 0.5, taxPct: 5 });
+};
+
+test("Topi: khớp bảng 100 triệu trong app (91/90/92/92 ngày)", () => {
+  const d = topi(100_000_000, "2025-09-26");
+  assert.deepEqual(segments(d).map((s) => days(s.start, s.end)), [91, 90, 92, 92]);
+  const at = (m: number) => Math.round(accrued(d, pd(addMonths(d.openDate, m))));
+  assert.deepEqual([at(3), at(6), at(9), at(12)], [1_495_890, 3_123_288, 4_786_849, 6_601_644]);
+  assert.equal(Math.round(expGross(d)), 6_601_644);
+});
+
+test("Topi: khoản thật 7.823.500 → lãi 516.480, thuế 25.824, nhận 8.314.156", () => {
+  const d = topi(7_823_500, "2025-09-26");
+  const gi = Math.round(expGross(d));
+  const tax = Math.round(gi * 0.05);
+  assert.equal(gi, 516_480);
+  assert.equal(tax, 25_824);
+  assert.equal(d.principal + gi - tax, 8_314_156);
+  assert.equal(Math.round(effectiveRate(d) * 100) / 100, 6.6);
+});
+
+test("Topi: rút sớm giữ lãi các quý đã xong, quý dở tính 0,5%", () => {
+  const d = topi(100_000_000, "2025-09-26");
+  const t = pd(addMonths(d.openDate, 6)) + 59 * 86_400_000; // 59 ngày vào quý 3
+  const want = 3_123_288 + 100e6 * 0.005 * 59 / 365;
+  assert.equal(Math.round(earlyInterest(d, t)), Math.round(want));
+  assert.equal(currentSegment(d, t)?.index, 2);
+  // sổ lãi cố định vẫn tính 0,5% cho toàn bộ thời gian
+  const flat = dep({ openDate: "2025-01-01", maturityDate: "2026-01-01", earlyRate: 0.5 });
+  assert.equal(Math.round(earlyInterest(flat, pd("2025-07-01"))), Math.round(100e6 * 0.005 * 181 / 365));
+});
+
+test("validate: bậc lãi suy ra kỳ hạn, ngày đáo hạn, lãi bình quân", () => {
+  const x = parseDeposit({ institution: "Topi", principal: 7_823_500, openDate: "2025-09-26", maturityDate: "2099-01-01", tiers: PRESETS[0].tiers });
+  assert.equal(x.maturityDate, "2026-09-26");
+  assert.equal(x.termMonths, 12);
+  assert.equal(x.rate, 6.602);
+  assert.throws(() => parseTiers([{ upToMonth: 6, rate: 6 }, { upToMonth: 3, rate: 7 }]), ValidationError);
+  assert.equal(parseTiers([]), null);
 });

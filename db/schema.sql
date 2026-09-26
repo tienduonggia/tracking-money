@@ -25,6 +25,9 @@ create table if not exists deposits (
   constraint maturity_after_open check (maturity_date > open_date),
   constraint closed_has_close_info check (status = 'active' or (close_date is not null and close_type is not null))
 );
+-- Lãi bậc thang: [{"upToMonth":3,"rate":6},{"upToMonth":6,"rate":6.6},...]; null = lãi cố định
+alter table deposits add column if not exists tiers jsonb;
+
 create index if not exists deposits_owner_idx on deposits (owner_id, status, maturity_date);
 
 create table if not exists holdings (

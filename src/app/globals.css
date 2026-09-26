@@ -195,3 +195,13 @@ body{padding-top:env(safe-area-inset-top,0px);padding-bottom:calc(48px + env(saf
 .or{display:flex;align-items:center;gap:10px;color:var(--ink-3);font-size:12.5px}
 .or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
 a.btn{text-decoration:none;color:inherit}
+
+.tiers{display:grid;gap:8px;background:var(--surface-2);border-radius:10px;padding:10px 12px}
+.tiers-head,.tier-row{display:grid;grid-template-columns:96px 1fr 1fr 36px;gap:8px;align-items:center}
+.tiers-head{font-size:12px;color:var(--ink-3)}
+.tiers-head span:first-child{grid-column:2}
+.tiers-head span:nth-child(2){grid-column:3}
+.tier-row input{border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:7px 9px;width:100%;color:var(--ink);font-size:14px}
+.tiers > .btn{justify-self:start}
+.pill.tier{background:var(--accent-soft);color:var(--accent)}
+.tier-now{display:flex;gap:8px;align-items:center;flex-wrap:wrap}

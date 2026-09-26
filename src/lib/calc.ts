@@ -1,5 +1,5 @@
 // Domain logic dùng chung cho client và server. Không import gì từ Node/React.
-import type { Deposit, Holding, HoldingType } from "./types.ts";
+import type { Deposit, Holding, HoldingType, Tier } from "./types.ts";
 
 export const DAY = 86_400_000;
 
@@ -66,18 +66,63 @@ export const TYPES: Record<HoldingType | "saving", { label: string; color: strin
 export const TYPE_ORDER = ["saving", "etf", "coin", "gold", "stock", "cash", "other"] as const;
 
 /* ---------- interest math (lãi đơn, cuối kỳ, số ngày thực tế / 365) ---------- */
-type DepTerms = Pick<Deposit, "principal" | "rate" | "openDate" | "maturityDate">;
+type DepTerms = Pick<Deposit, "principal" | "rate" | "openDate" | "maturityDate"> & { tiers?: Tier[] | null };
 
 export const termDays = (d: Pick<Deposit, "openDate" | "maturityDate">) =>
   Math.max(1, days(pd(d.openDate), pd(d.maturityDate)));
-export const expGross = (d: DepTerms) => (d.principal * d.rate) / 100 * termDays(d) / 365;
-export const accrued = (d: DepTerms, t: number) => {
+
+export interface Segment { start: number; end: number; rate: number; fromMonth: number; toMonth: number }
+
+/** Các giai đoạn lãi của sổ. Lãi cố định = 1 giai đoạn. Bậc thang: mốc tính bằng addMonths từ ngày gửi. */
+export function segments(d: DepTerms): Segment[] {
   const o = pd(d.openDate), m = pd(d.maturityDate);
-  const e = Math.min(Math.max(t, o), m);
-  return (d.principal * d.rate) / 100 * days(o, e) / 365;
+  if (!d.tiers || !d.tiers.length) return [{ start: o, end: m, rate: d.rate, fromMonth: 0, toMonth: 0 }];
+  const out: Segment[] = [];
+  let prev = 0;
+  for (const t of d.tiers) {
+    const start = pd(addMonths(d.openDate, prev));
+    const end = Math.min(pd(addMonths(d.openDate, t.upToMonth)), m);
+    if (end > start) out.push({ start, end, rate: t.rate, fromMonth: prev, toMonth: t.upToMonth });
+    prev = t.upToMonth;
+  }
+  return out;
+}
+
+const segInterest = (p: number, s: Segment, a: number, b: number) =>
+  (p * s.rate) / 100 * Math.max(0, days(Math.max(s.start, a), Math.min(s.end, b))) / 365;
+
+/** Lãi hợp đồng từ ngày gửi đến t (không vượt đáo hạn). */
+export const accrued = (d: DepTerms, t: number) => {
+  const o = pd(d.openDate);
+  return segments(d).reduce((sum, s) => sum + segInterest(d.principal, s, o, t), 0);
 };
-export const earlyInterest = (d: Pick<Deposit, "principal" | "earlyRate" | "openDate">, t: number) =>
-  (d.principal * (d.earlyRate || 0)) / 100 * Math.max(0, days(pd(d.openDate), t)) / 365;
+export const expGross = (d: DepTerms) => accrued(d, pd(d.maturityDate));
+/** Lãi bình quân %/năm nếu giữ đủ kỳ (dùng làm "rate" cho sổ bậc thang). */
+export const effectiveRate = (d: DepTerms) => (expGross({ ...d, principal: 100 }) / 100) * 365 / termDays(d) * 100;
+
+/**
+ * Lãi khi rút trước hạn tại t.
+ * Cố định: toàn bộ số ngày tính lãi không kỳ hạn.
+ * Bậc thang: giữ đủ lãi các giai đoạn đã xong, phần ngày của giai đoạn đang dở tính lãi không kỳ hạn.
+ */
+export function earlyInterest(d: Pick<Deposit, "principal" | "earlyRate" | "openDate" | "maturityDate" | "rate"> & { tiers?: Tier[] | null }, t: number) {
+  const o = pd(d.openDate);
+  if (!d.tiers || !d.tiers.length) return (d.principal * (d.earlyRate || 0)) / 100 * Math.max(0, days(o, t)) / 365;
+  let sum = 0;
+  for (const s of segments(d)) {
+    if (t >= s.end) sum += segInterest(d.principal, s, o, s.end);
+    else if (t > s.start) sum += (d.principal * (d.earlyRate || 0)) / 100 * days(s.start, t) / 365;
+  }
+  return sum;
+}
+
+/** Giai đoạn đang chạy tại t (sổ bậc thang). */
+export function currentSegment(d: DepTerms, t: number) {
+  const segs = segments(d);
+  const i = segs.findIndex((s) => t >= s.start && t < s.end);
+  return i < 0 ? null : { index: i, count: segs.length, seg: segs[i] };
+}
+
 export const netClosed = (d: Pick<Deposit, "interest" | "tax" | "fee">) => (d.interest || 0) - (d.tax || 0) - (d.fee || 0);
 
 /** Lãi phát sinh trong [a, b). Sổ đã tất toán: chia đều lãi thực nhận theo số ngày giữ. */
@@ -90,9 +135,22 @@ export function accrualInRange(d: Deposit, a: number, b: number, t: number): num
     return (d.interest || 0) * ov / tot;
   }
   const end = Math.min(pd(d.maturityDate), t);
-  const ov = Math.max(0, days(Math.max(o, a), Math.min(end, b)));
-  return (d.principal * d.rate) / 100 * ov / 365;
+  const lo = Math.max(o, a), hi = Math.min(end, b);
+  return hi > lo ? accrued(d, hi) - accrued(d, lo) : 0;
 }
+
+/* ---------- mẫu sản phẩm ---------- */
+export const PRESETS: { key: string; label: string; institution: string; tiers: Tier[]; taxPct: number; earlyRate: number; note: string }[] = [
+  {
+    key: "topi-flex",
+    label: "Topi – Tích luỹ linh hoạt (6% / 6,6% / 6,6% / 7,2%)",
+    institution: "Topi",
+    tiers: [{ upToMonth: 3, rate: 6 }, { upToMonth: 6, rate: 6.6 }, { upToMonth: 9, rate: 6.6 }, { upToMonth: 12, rate: 7.2 }],
+    taxPct: 5,
+    earlyRate: 0.5,
+    note: "Tích luỹ linh hoạt, tự tái đầu tư khi đáo hạn",
+  },
+];
 
 export function rangeBounds(r: string, t: number): [number, number, string] {
   if (r === "12m") {

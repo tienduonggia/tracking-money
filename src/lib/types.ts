@@ -1,3 +1,9 @@
+/** Một bậc lãi: áp lãi suất `rate` từ mốc bậc trước đến hết tháng thứ `upToMonth` kể từ ngày gửi. */
+export interface Tier {
+  upToMonth: number;
+  rate: number; // %/năm
+}
+
 export type DepositStatus = "active" | "closed";
 export type CloseType = "matured" | "early";
 
@@ -6,7 +12,8 @@ export interface Deposit {
   institution: string;
   label: string;
   principal: number;
-  rate: number; // %/năm
+  rate: number; // %/năm (sổ bậc thang: lãi bình quân nếu giữ đủ kỳ)
+  tiers: Tier[] | null; // null = lãi cố định
   termMonths: number;
   openDate: string; // YYYY-MM-DD
   maturityDate: string;

@@ -1,8 +1,9 @@
 "use client";
-import { useState } from "react";
-import type { Deposit, DepositInput, Holding, HoldingInput, HoldingType } from "@/lib/types.ts";
+import { useMemo, useState } from "react";
+import type { Deposit, DepositInput, Holding, HoldingInput, HoldingType, Tier } from "@/lib/types.ts";
 import {
-  accrued, addMonths, days, dstr, earlyInterest, expGross, fd, fmt2, money, netClosed, pd, signed, termDays, today,
+  PRESETS, accrued, addMonths, days, dstr, earlyInterest, effectiveRate, expGross, fd, fmt2, money, netClosed, pd, segments, signed,
+  termDays, today,
 } from "@/lib/calc.ts";
 import { Modal, MoneyInput, Confirm } from "./ui.tsx";
 
@@ -25,17 +26,21 @@ export function DepositDialog({ draft, institutions, onClose, onSave, onDelete }
   );
 }
 
+type RateMode = "flat" | "tiered";
+type TierRow = { upToMonth: string; rate: string };
+
 function DepositForm({ draft, institutions, onClose, onSave, onDelete }: {
   draft: DepositDraft; institutions: string[]; onClose: () => void;
   onSave: (id: string | undefined, x: DepositInput) => Promise<boolean>; onDelete: (id: string) => Promise<void>;
 }) {
+  void institutions;
   const open0 = draft.openDate ?? fd(today());
   const term0 = draft.termMonths ?? 6;
   const [f, setF] = useState({
     institution: draft.institution ?? "",
     label: draft.label ?? "",
     principal: (draft.principal ?? null) as number | null,
-    rate: draft.rate !== undefined ? String(draft.rate) : "",
+    rate: draft.rate !== undefined && !draft.tiers ? String(draft.rate) : "",
     openDate: open0,
     termMonths: TERMS.includes(term0) ? term0 : 0,
     maturityDate: draft.maturityDate ?? addMonths(open0, term0 || 6),
@@ -43,23 +48,55 @@ function DepositForm({ draft, institutions, onClose, onSave, onDelete }: {
     taxPct: String(draft.taxPct ?? 0),
     note: draft.note ?? "",
   });
+  const [mode, setMode] = useState<RateMode>(draft.tiers?.length ? "tiered" : "flat");
+  const [rows, setRows] = useState<TierRow[]>(
+    (draft.tiers ?? [{ upToMonth: 3, rate: 0 }]).map((t) => ({ upToMonth: String(t.upToMonth), rate: t.rate ? String(t.rate) : "" })),
+  );
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
   const setOpen = (v: string) => setF((p) => ({ ...p, openDate: v, maturityDate: p.termMonths && v ? addMonths(v, p.termMonths) : p.maturityDate }));
   const setTerm = (m: number) => setF((p) => ({ ...p, termMonths: m, maturityDate: m && p.openDate ? addMonths(p.openDate, m) : p.maturityDate }));
 
-  const principal = f.principal ?? 0, rate = Number(f.rate) || 0, taxPct = Number(f.taxPct) || 0;
-  const valid = principal > 0 && rate > 0 && f.openDate && f.maturityDate && pd(f.maturityDate) > pd(f.openDate);
-  const g = valid ? expGross({ principal, rate, openDate: f.openDate, maturityDate: f.maturityDate }) : 0;
+  const applyPreset = (key: string) => {
+    if (key === "flat" || key === "tiered") { setMode(key); return; }
+    const pr = PRESETS.find((x) => x.key === key);
+    if (!pr) return;
+    setMode("tiered");
+    setRows(pr.tiers.map((t) => ({ upToMonth: String(t.upToMonth), rate: String(t.rate) })));
+    setF((p) => ({
+      ...p, taxPct: String(pr.taxPct), earlyRate: String(pr.earlyRate),
+      institution: p.institution || pr.institution, note: p.note || pr.note,
+    }));
+  };
+  const updRow = (i: number, k: keyof TierRow, v: string) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+
+  // Chuẩn hoá bậc: mốc tăng dần, lãi > 0
+  const tiers: Tier[] | null = useMemo(() => {
+    if (mode !== "tiered") return null;
+    const t = rows.map((r) => ({ upToMonth: Math.round(Number(r.upToMonth)), rate: Number(r.rate) }));
+    let prev = 0;
+    for (const x of t) { if (!(x.upToMonth > prev) || !(x.rate > 0)) return null; prev = x.upToMonth; }
+    return t.length ? t : null;
+  }, [mode, rows]);
+
+  const principal = f.principal ?? 0, taxPct = Number(f.taxPct) || 0;
+  const maturityDate = tiers && f.openDate ? addMonths(f.openDate, tiers[tiers.length - 1].upToMonth) : f.maturityDate;
+  const terms = { principal, rate: Number(f.rate) || 0, openDate: f.openDate, maturityDate, tiers };
+  const valid = principal > 0 && !!f.openDate && !!maturityDate && pd(maturityDate) > pd(f.openDate)
+    && (mode === "tiered" ? !!tiers : terms.rate > 0);
+  const g = valid ? expGross(terms) : 0;
   const tax = (g * taxPct) / 100;
+  const segs = valid && tiers ? segments(terms) : [];
 
   const submit = async () => {
     if (!valid) return;
     setBusy(true);
     const base: DepositInput = {
-      institution: f.institution.trim(), label: f.label.trim(), principal, rate, termMonths: f.termMonths,
-      openDate: f.openDate, maturityDate: f.maturityDate, earlyRate: Number(f.earlyRate) || 0, taxPct, note: f.note.trim(),
+      institution: f.institution.trim(), label: f.label.trim(), principal,
+      rate: tiers ? Math.round(effectiveRate(terms) * 1000) / 1000 : terms.rate, tiers,
+      termMonths: tiers ? tiers[tiers.length - 1].upToMonth : f.termMonths,
+      openDate: f.openDate, maturityDate, earlyRate: Number(f.earlyRate) || 0, taxPct, note: f.note.trim(),
       status: draft.status ?? "active", closeDate: draft.closeDate ?? null, closeType: draft.closeType ?? null,
       interest: draft.interest ?? null, tax: draft.tax ?? null, fee: draft.fee ?? null, renewedFrom: draft.renewedFrom ?? null,
     };
@@ -72,6 +109,13 @@ function DepositForm({ draft, institutions, onClose, onSave, onDelete }: {
     <>
       <h3>{draft.id ? "Sửa sổ tiết kiệm" : "Thêm sổ tiết kiệm"}</h3>
       <div className="fields">
+        <label className="f full">Kiểu lãi
+          <select id="d_mode" value={mode} onChange={(e) => applyPreset(e.target.value)}>
+            <option value="flat">Cố định (sổ ngân hàng thường)</option>
+            <option value="tiered">Bậc thang theo thời gian giữ (tự nhập)</option>
+            {PRESETS.map((p) => <option key={p.key} value={p.key}>Mẫu: {p.label}</option>)}
+          </select>
+        </label>
         <label className="f">Nơi gửi
           <input id="d_inst" list="instList" required value={f.institution} onChange={(e) => set("institution", e.target.value)} placeholder="MB Bank, Timo, Topi…" />
         </label>
@@ -81,40 +125,65 @@ function DepositForm({ draft, institutions, onClose, onSave, onDelete }: {
         <label className="f">Số tiền gốc (₫)
           <MoneyInput id="d_principal" required value={f.principal} onChange={(v) => set("principal", v)} placeholder="50.000.000" />
         </label>
-        <label className="f">Lãi suất (%/năm)
-          <input id="d_rate" type="number" step="0.01" min="0" required value={f.rate} onChange={(e) => set("rate", e.target.value)} placeholder="5.2" />
-        </label>
         <label className="f">Ngày gửi
           <input id="d_open" type="date" required value={f.openDate} onChange={(e) => setOpen(e.target.value)} />
         </label>
-        <label className="f">Kỳ hạn
-          <select id="d_term" value={f.termMonths} onChange={(e) => setTerm(Number(e.target.value))}>
-            {TERMS.map((m) => <option key={m} value={m}>{m} tháng</option>)}
-            <option value={0}>Tự nhập ngày đáo hạn</option>
-          </select>
-        </label>
-        <label className="f">Ngày đáo hạn
-          <input id="d_mat" type="date" required value={f.maturityDate} onChange={(e) => set("maturityDate", e.target.value)} />
-        </label>
+        {mode === "flat" ? (
+          <>
+            <label className="f">Lãi suất (%/năm)
+              <input id="d_rate" type="number" step="0.01" min="0" required value={f.rate} onChange={(e) => set("rate", e.target.value)} placeholder="5.2" />
+            </label>
+            <label className="f">Kỳ hạn
+              <select id="d_term" value={f.termMonths} onChange={(e) => setTerm(Number(e.target.value))}>
+                {TERMS.map((m) => <option key={m} value={m}>{m} tháng</option>)}
+                <option value={0}>Tự nhập ngày đáo hạn</option>
+              </select>
+            </label>
+            <label className="f">Ngày đáo hạn
+              <input id="d_mat" type="date" required value={f.maturityDate} onChange={(e) => set("maturityDate", e.target.value)} />
+            </label>
+          </>
+        ) : (
+          <div className="f full tiers">
+            <div className="tiers-head"><span>Đến hết tháng thứ</span><span>Lãi suất (%/năm)</span><span /></div>
+            {rows.map((r, i) => (
+              <div className="tier-row" key={i}>
+                <span className="note">{i === 0 ? "Từ tháng 0" : `Từ tháng ${rows[i - 1].upToMonth || "?"}`} →</span>
+                <input id={`t_m${i}`} aria-label={`Bậc ${i + 1}: đến tháng`} type="number" min="1" step="1" value={r.upToMonth} onChange={(e) => updRow(i, "upToMonth", e.target.value)} />
+                <input id={`t_r${i}`} aria-label={`Bậc ${i + 1}: lãi suất`} type="number" min="0" step="0.01" value={r.rate} onChange={(e) => updRow(i, "rate", e.target.value)} placeholder="6.6" />
+                <button type="button" className="btn small ghost" aria-label="Xoá bậc" disabled={rows.length === 1} onClick={() => setRows((x) => x.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            ))}
+            <button type="button" className="btn small" disabled={rows.length >= 12}
+              onClick={() => setRows((x) => [...x, { upToMonth: String((Number(x[x.length - 1]?.upToMonth) || 0) + 3), rate: "" }])}>+ Thêm bậc</button>
+            <span className="note">Đáo hạn: {dstr(maturityDate)} · Rút trước hạn: giữ lãi các bậc đã xong, phần ngày của bậc đang dở tính lãi không kỳ hạn.</span>
+          </div>
+        )}
         <label className="f">Lãi không kỳ hạn (%/năm) <span className="hint">áp khi rút trước hạn</span>
           <input id="d_early" type="number" step="0.01" min="0" value={f.earlyRate} onChange={(e) => set("earlyRate", e.target.value)} />
         </label>
-        <label className="f">Thuế trên lãi (%) <span className="hint">ngân hàng: 0</span>
+        <label className="f">Thuế trên lãi (%) <span className="hint">ngân hàng: 0 · fintech: 5</span>
           <input id="d_tax" type="number" step="0.01" min="0" value={f.taxPct} onChange={(e) => set("taxPct", e.target.value)} />
         </label>
-        <label className="f">Ghi chú
+        <label className="f full">Ghi chú
           <input id="d_note" value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Online, tái tục gốc…" />
         </label>
       </div>
       <div className="calc">
         {valid ? (
           <>
-            <div className="row"><span>Số ngày gửi</span><span className="num">{termDays(f)} ngày</span></div>
-            <div className="row"><span>Lãi dự kiến (gốc × LS × ngày / 365)</span><span className="num">{money(g)}</span></div>
+            {segs.map((sg, i) => (
+              <div className="row" key={i}>
+                <span>Tháng {sg.fromMonth}–{sg.toMonth} · {fmt2(sg.rate)}% · {days(sg.start, sg.end)} ngày</span>
+                <span className="num">{money(accrued(terms, sg.end) - accrued(terms, sg.start))}</span>
+              </div>
+            ))}
+            <div className="row"><span>Số ngày gửi</span><span className="num">{termDays({ openDate: f.openDate, maturityDate })} ngày</span></div>
+            <div className="row"><span>Lãi dự kiến{tiers ? ` (bình quân ${fmt2(effectiveRate(terms))}%/năm)` : " (gốc × LS × ngày / 365)"}</span><span className="num">{money(g)}</span></div>
             {tax > 0 && <div className="row"><span>Thuế {taxPct}%</span><span className="num">−{money(tax)}</span></div>}
             <div className="row total"><span>Nhận khi đáo hạn</span><span className="num">{money(principal + g - tax)}</span></div>
           </>
-        ) : <span className="note">Nhập gốc, lãi suất và ngày (đáo hạn sau ngày gửi) để xem lãi dự kiến.</span>}
+        ) : <span className="note">{mode === "tiered" ? "Nhập gốc, ngày gửi và các bậc (mốc tháng tăng dần, lãi > 0) để xem lãi dự kiến." : "Nhập gốc, lãi suất và ngày (đáo hạn sau ngày gửi) để xem lãi dự kiến."}</span>}
       </div>
       <div className="dlg-actions">
         {draft.id && <button type="button" className="btn ghost danger left" onClick={() => setConfirmDel(true)}>Xoá sổ</button>}
@@ -211,7 +280,7 @@ function CloseForm({ d, onClose, onConfirm }: { d: Deposit; onClose: () => void;
         </label>
       </div>
       <div className="calc">
-        <div className="row"><span>Gửi {held} ngày · lãi gợi ý {s.early ? `(LS không kỳ hạn ${fmt2(d.earlyRate)}%)` : ""}</span><span className="num">{money(s.gi)}</span></div>
+        <div className="row"><span>Gửi {held} ngày · lãi gợi ý {s.early ? (d.tiers ? `(giữ lãi các bậc đã xong, bậc dở ${fmt2(d.earlyRate)}%)` : `(LS không kỳ hạn ${fmt2(d.earlyRate)}%)`) : ""}</span><span className="num">{money(s.gi)}</span></div>
         {s.early && <div className="row neg"><span>Lãi mất so với giữ đến hạn</span><span className="num">−{money(Math.max(0, accrued(d, pd(date)) - (gi || 0)))}</span></div>}
         <div className="row"><span>Lãi ròng</span><span className="num">{money(net)}</span></div>
         <div className="row total"><span>Tổng nhận về</span><span className="num">{money(d.principal + net)}</span></div>
@@ -227,9 +296,9 @@ function CloseForm({ d, onClose, onConfirm }: { d: Deposit; onClose: () => void;
 /** Sổ mới khi tái tục (người dùng xem lại LS rồi bấm Lưu). */
 export function renewalDraft(d: Deposit, closed: DepositInput, roll: Rollover): DepositDraft {
   const p = roll === "all" ? d.principal + netClosed(closed) : d.principal;
-  const term = d.termMonths || 6;
+  const term = d.tiers?.length ? d.tiers[d.tiers.length - 1].upToMonth : d.termMonths || 6;
   return {
-    institution: d.institution, label: d.label, principal: Math.round(p), rate: d.rate, openDate: closed.closeDate!,
+    institution: d.institution, label: d.label, principal: Math.round(p), rate: d.rate, tiers: d.tiers, openDate: closed.closeDate!,
     termMonths: term, maturityDate: addMonths(closed.closeDate!, term), earlyRate: d.earlyRate, taxPct: d.taxPct,
     note: `Tái tục từ sổ ${dstr(d.openDate)}`, renewedFrom: d.id, status: "active",
   };
