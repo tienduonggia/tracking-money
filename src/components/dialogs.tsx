@@ -7,7 +7,7 @@ import {
 } from "@/lib/calc.ts";
 import { Modal, MoneyInput, Confirm } from "./ui.tsx";
 
-const TERMS = [1, 3, 6, 9, 12, 13, 18, 24, 36];
+const TERMS = [...Array.from({ length: 24 }, (_, i) => i + 1), 36, 48, 60]; // 1–24 tháng + dài hạn
 
 /* ======================= Deposit ======================= */
 export type DepositDraft = Partial<DepositInput> & { id?: string };
