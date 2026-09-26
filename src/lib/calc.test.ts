@@ -34,7 +34,7 @@ test("yearStats: lãi ròng, thuế, phí, lãi mất do rút sớm", () => {
   const early = dep({ status: "closed", closeDate: "2026-05-01", closeType: "early", openDate: "2026-01-01", maturityDate: "2027-01-01", interest: 100_000, tax: 0, fee: 0 });
   const Y = yearStats([closed, early, dep({ openDate: "2026-01-01", maturityDate: "2027-01-01" })], "2026", pd("2026-07-01"));
   assert.equal(Y.net, 2_000_000 + 100_000 - 2000 - 5500);
-  assert.equal(Y.months[2], 2_000_000 - 7500); // tháng 3
+  assert.equal(Y.buckets[2].value, 2_000_000 - 7500); // tháng 3
   assert.equal(Y.early, 1);
   assert.equal(Math.round(Y.lost), Math.round(100e6 * 0.05 * 120 / 365 - 100_000));
 });
@@ -108,4 +108,19 @@ test("validate: bậc lãi suy ra kỳ hạn, ngày đáo hạn, lãi bình quâ
   assert.equal(x.rate, 6.602);
   assert.throws(() => parseTiers([{ upToMonth: 6, rate: 6 }, { upToMonth: 3, rate: 7 }]), ValidationError);
   assert.equal(parseTiers([]), null);
+});
+
+test("Toàn bộ + chia lãi sổ bậc thang đã tất toán theo bậc", () => {
+  const d = { ...topi(7_823_500, "2025-09-26"), status: "closed" as const, closeDate: "2026-09-26", closeType: "matured" as const, interest: 516_480, tax: 25_824, fee: 0 };
+  const t = pd("2026-09-27");
+  const y25 = yearStats([d], "2025", t).accrual, y26 = yearStats([d], "2026", t).accrual;
+  assert.equal(Math.round(y25), 125_519);
+  assert.equal(Math.round(y26), 390_961);
+  const all = yearStats([d], "all", t);
+  assert.equal(Math.round(all.accrual), 516_480);
+  assert.equal(all.net, 490_656);
+  assert.deepEqual(all.buckets.map((b) => [b.label, b.value]), [["2025", 0], ["2026", 490_656]]);
+  // sổ cố định vẫn chia đều theo ngày
+  const flat = dep({ status: "closed", openDate: "2025-12-02", closeDate: "2026-01-31", closeType: "matured", interest: 600_000 });
+  assert.equal(Math.round(yearStats([flat], "2026", t).accrual), 300_000);
 });

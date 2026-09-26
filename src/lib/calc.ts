@@ -129,10 +129,14 @@ export const netClosed = (d: Pick<Deposit, "interest" | "tax" | "fee">) => (d.in
 export function accrualInRange(d: Deposit, a: number, b: number, t: number): number {
   const o = pd(d.openDate);
   if (d.status === "closed") {
+    // Sổ cố định: chia đều lãi thực nhận theo ngày giữ.
+    // Sổ bậc thang: chia theo lãi hợp đồng từng bậc (bậc lãi cao nhận phần lớn hơn). Tổng các kỳ luôn bằng lãi thực nhận.
     const c = pd(d.closeDate);
-    const tot = Math.max(1, days(o, c));
-    const ov = Math.max(0, days(Math.max(o, a), Math.min(c, b)));
-    return (d.interest || 0) * ov / tot;
+    const lo = Math.max(o, a), hi = Math.min(c, b);
+    if (hi <= lo) return 0;
+    const shapeTot = d.tiers?.length ? accrued(d, c) : 0;
+    if (shapeTot > 0) return (d.interest || 0) * (accrued(d, hi) - accrued(d, lo)) / shapeTot;
+    return (d.interest || 0) * days(lo, hi) / Math.max(1, days(o, c));
   }
   const end = Math.min(pd(d.maturityDate), t);
   const lo = Math.max(o, a), hi = Math.min(end, b);
@@ -153,6 +157,7 @@ export const PRESETS: { key: string; label: string; institution: string; tiers: 
 ];
 
 export function rangeBounds(r: string, t: number): [number, number, string] {
+  if (r === "all") return [-8.64e15, 8.64e15, "toàn bộ"];
   if (r === "12m") {
     const b = t + DAY;
     return [b - 365 * DAY, b, "12 tháng gần nhất"];
@@ -190,19 +195,27 @@ export function yearStats(deps: Deposit[], r: string, t: number) {
   const earlies = closed.filter((d) => d.closeType === "early");
   // Lãi mất = lãi theo LS hợp đồng cho số ngày đã giữ − lãi thực nhận
   const lost = earlies.reduce((s, d) => s + Math.max(0, accrued(d, pd(d.closeDate)) - (d.interest || 0)), 0);
-  const mLabels: [number, number][] = [];
-  if (r === "12m") {
-    const n = new Date(t);
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() - i, 1));
-      mLabels.push([d.getUTCFullYear(), d.getUTCMonth()]);
+  // Cột biểu đồ: theo tháng (1 năm / 12 tháng gần nhất) hoặc theo năm (toàn bộ)
+  const buckets: { key: string; label: string; tip: string; value: number }[] = [];
+  const cur = new Date(t);
+  if (r === "all") {
+    const ys = deps.flatMap((d) => [d.openDate, d.closeDate]).filter(Boolean).map((x) => Number(x!.slice(0, 4)));
+    const y0 = Math.min(cur.getUTCFullYear(), ...ys), y1 = Math.max(cur.getUTCFullYear(), ...ys);
+    for (let y = y0; y <= y1; y++) buckets.push({ key: String(y), label: String(y), tip: `Năm ${y}`, value: 0 });
+  } else {
+    for (let i = 0; i < 12; i++) {
+      const d = r === "12m"
+        ? new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() - 11 + i, 1))
+        : new Date(Date.UTC(Number(r), i, 1));
+      const y = d.getUTCFullYear(), m = d.getUTCMonth();
+      buckets.push({ key: `${y}-${m}`, label: `T${m + 1}`, tip: `Tháng ${m + 1}/${y}`, value: 0 });
     }
-  } else for (let i = 0; i < 12; i++) mLabels.push([Number(r), i]);
-  const months = mLabels.map(() => 0);
+  }
   for (const d of closed) {
     const c = new Date(pd(d.closeDate));
-    const i = mLabels.findIndex(([y, m]) => y === c.getUTCFullYear() && m === c.getUTCMonth());
-    if (i >= 0) months[i] += netClosed(d);
+    const key = r === "all" ? String(c.getUTCFullYear()) : `${c.getUTCFullYear()}-${c.getUTCMonth()}`;
+    const bk = buckets.find((x) => x.key === key);
+    if (bk) bk.value += netClosed(d);
   }
-  return { label, closed, gross, tax, fee, net: gross - tax - fee, accrual, lost, early: earlies.length, months, mLabels };
+  return { label, closed, gross, tax, fee, net: gross - tax - fee, accrual, lost, early: earlies.length, buckets };
 }

@@ -19,6 +19,7 @@ function Pill({ left }: { left: number }) {
 export function RangeSelect({ id, value, years, onChange }: { id: string; value: string; years: number[]; onChange: (v: string) => void }) {
   return (
     <select id={id} aria-label="Khoảng thời gian" value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="all">Toàn bộ</option>
       <option value="12m">12 tháng gần nhất</option>
       {years.map((y) => <option key={y} value={String(y)}>Năm {y}</option>)}
     </select>
@@ -63,7 +64,7 @@ export function Overview({ deps, hold, t, range, years, setRange, onCloseDep }: 
           <Donut T={T} />
         </div>
         <div className="panel">
-          <h2>Lãi tiết kiệm thực nhận theo tháng <span className="sub">· {Y.label}: {money(Y.net)}</span>
+          <h2>Lãi tiết kiệm thực nhận {range === "all" ? "theo năm" : "theo tháng"} <span className="sub">· {Y.label}: {money(Y.net)}</span>
             <span className="right"><RangeSelect id="range1" value={range} years={years} onChange={setRange} /></span></h2>
           <MonthlyBars Y={Y} />
         </div>
@@ -152,10 +153,11 @@ function MonthlyBars({ Y }: { Y: YStats }) {
     return () => ro.disconnect();
   }, []);
   const H = 220, pl = 46, pr = 8, pt = 12, pb = 26;
-  const mx = Math.max(...Y.months, 0);
+  const mx = Math.max(...Y.buckets.map((b) => b.value), 0);
   const nice = (v: number) => { if (v <= 0) return 1e6; const p = 10 ** Math.floor(Math.log10(v)); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; };
   const top = nice(mx * 1.05);
-  const cw = (W - pl - pr) / 12, bw = Math.min(28, cw * 0.6);
+  const n = Math.max(1, Y.buckets.length);
+  const cw = (W - pl - pr) / n, bw = Math.min(28, cw * 0.6);
   const y = (v: number) => pt + (H - pt - pb) * (1 - v / top);
   return (
     <div className="chart-box" ref={ref}>
@@ -166,15 +168,15 @@ function MonthlyBars({ Y }: { Y: YStats }) {
             <text x={pl - 6} y={y(tk) + 4} textAnchor="end" fontSize="11" fill="var(--ink-3)">{moneyS(tk)}</text>
           </g>
         ))}
-        {Y.months.map((v, i) => {
+        {Y.buckets.map((bk, i) => {
+          const v = bk.value;
           const cx = pl + cw * i + cw / 2;
-          const [yy, mm] = Y.mLabels[i];
           const h = y(0) - y(v), rr = Math.min(4, h);
           return (
-            <g key={i}>
+            <g key={bk.key}>
               {v > 0 && <path fill="var(--s1)" d={`M${cx - bw / 2} ${y(0)}V${y(v) + rr}Q${cx - bw / 2} ${y(v)} ${cx - bw / 2 + rr} ${y(v)}H${cx + bw / 2 - rr}Q${cx + bw / 2} ${y(v)} ${cx + bw / 2} ${y(v) + rr}V${y(0)}Z`} />}
-              <rect x={cx - cw / 2} y={pt} width={cw} height={H - pt - pb} fill="transparent" data-tip={`Tháng ${mm + 1}/${yy}: ${money(v)}`} />
-              {(cw >= 26 || i % 2 === 0) && <text x={cx} y={H - 8} textAnchor="middle" fontSize="11" fill="var(--ink-3)">T{mm + 1}</text>}
+              <rect x={cx - cw / 2} y={pt} width={cw} height={H - pt - pb} fill="transparent" data-tip={`${bk.tip}: ${money(v)}`} />
+              {(cw >= 26 || i % 2 === 0) && <text x={cx} y={H - 8} textAnchor="middle" fontSize="11" fill="var(--ink-3)">{bk.label}</text>}
             </g>
           );
         })}
@@ -206,7 +208,7 @@ export function Savings({ deps, t, range, years, setRange, onEdit, onCloseDep }:
         <Strip k="Lãi thực nhận (ròng)" v={money(Y.net)} d={`${Y.closed.length} sổ đã tất toán`} c={Y.net > 0 ? "pos" : ""} />
         <Strip k="Thuế đã trừ" v={money(Y.tax)} d="trên lãi nhận" />
         <Strip k="Phí" v={money(Y.fee)} d="rút, chuyển tiền…" />
-        <Strip k="Lãi phát sinh trong kỳ" v={money(Y.accrual)} d="cả sổ chưa đáo hạn, tính theo ngày" />
+        <Strip k="Lãi sinh ra trong kỳ" v={money(Y.accrual)} d={range === "all" ? "tổng lãi đã sinh ra, kể cả sổ chưa đáo hạn" : "phần lãi thuộc kỳ này theo số ngày gửi, kể cả sổ chưa đáo hạn"} />
         <Strip k="Lãi mất do rút trước hạn" v={money(Y.lost)} d={`${Y.early} lần rút sớm`} c={Y.lost > 0 ? "neg" : ""} />
       </div>
       <div className="toolbar">
