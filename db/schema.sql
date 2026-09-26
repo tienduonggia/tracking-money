@@ -44,3 +44,13 @@ create table if not exists holdings (
   updated_at    timestamptz   not null default now()
 );
 create index if not exists holdings_owner_idx on holdings (owner_id);
+
+-- Đăng nhập website bằng mã, xác nhận từ Mini App (kiểu "đăng nhập TV")
+create table if not exists login_codes (
+  code          text primary key,
+  secret_hash   text        not null,             -- sha256 của secret chỉ trình duyệt giữ
+  user_id       bigint,                           -- set khi Mini App xác nhận
+  user_name     text        not null default '',
+  consumed      boolean     not null default false,
+  created_at    timestamptz not null default now()
+);

@@ -4,6 +4,7 @@ import type { Deposit, DepositInput, Holding, HoldingInput } from "@/lib/types.t
 import { dstr, fd, today } from "@/lib/calc.ts";
 import { api, ApiError, getToken, setToken, tg } from "@/lib/client.ts";
 import { ToastProvider, TipLayer, useToast } from "./ui.tsx";
+import { ApproveDialog, PairLogin } from "./pairing.tsx";
 import { Overview, Savings, Invest } from "./views.tsx";
 import { CloseDialog, DepositDialog, HoldingDialog, renewalDraft, type DepositDraft, type HoldingDraft, type Rollover } from "./dialogs.tsx";
 
@@ -93,8 +94,10 @@ function Login({ error, telegramId, onLogin, onError }: {
             {telegramId ? <div style={{ marginTop: 6 }}>Telegram id của bạn: <code>{telegramId}</code></div> : null}
           </div>
         )}
+        <PairLogin onLogin={onLogin} />
+        <div className="or"><span>hoặc</span></div>
         {bot ? <div className="widget" ref={box} /> : <div className="err">Thiếu biến NEXT_PUBLIC_TELEGRAM_BOT_USERNAME.</div>}
-        <p className="note">Hoặc mở app ngay trong Telegram qua nút menu của bot.</p>
+        <p className="note">Nút Telegram yêu cầu xác nhận qua tin nhắn; nếu không nhận được tin, dùng cách đăng nhập bằng mã ở trên.</p>
       </div>
     </div>
   );
@@ -113,6 +116,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
   const [closing, setClosing] = useState<Deposit | null>(null);
   const [holdDraft, setHoldDraft] = useState<HoldingDraft | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [approve, setApprove] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const t = today();
 
@@ -129,6 +133,9 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
   }, [onErr]);
 
   useEffect(() => {
+    // Mở từ link t.me/<bot>/<app>?startapp=login_XXXX → mở sẵn hộp xác nhận
+    const sp = tg()?.initDataUnsafe?.start_param || "";
+    if (sp.startsWith("login_")) setApprove(sp.slice(6));
     load();
     try { const s = localStorage.getItem("sts_tab") as Tab | null; if (s) setTab(s); } catch { /* ignore */ }
   }, [load]);
@@ -237,6 +244,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
       <footer className="note" style={{ marginTop: 24, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {!inTelegram && <button className="btn small ghost" onClick={exportJson}>Xuất JSON</button>}
         <button className="btn small ghost" onClick={() => fileRef.current?.click()}>Nhập JSON</button>
+        <button className="btn small ghost" onClick={() => setApprove("")}>Đăng nhập máy tính</button>
         <input ref={fileRef} type="file" accept="application/json,.json" className="file-in"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) importJson(f); e.target.value = ""; }} />
         <span style={{ marginLeft: "auto" }} className="userbox">
@@ -249,6 +257,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
       <datalist id="instList">{places.map((p) => <option key={p} value={p} />)}</datalist>
       <DepositDialog draft={depDraft} institutions={places} onClose={() => setDepDraft(null)} onSave={saveDep} onDelete={delDep} />
       <CloseDialog deposit={closing} onClose={() => setClosing(null)} onConfirm={confirmClose} />
+      <ApproveDialog open={approve !== null} initialCode={approve || ""} onClose={() => setApprove(null)} toast={toast} />
       <HoldingDialog draft={holdDraft} places={places} onClose={() => setHoldDraft(null)} onSave={saveHold} onDelete={delHold} />
     </div>
   );

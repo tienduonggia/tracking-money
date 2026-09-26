@@ -47,6 +47,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 /* Telegram WebApp typing (phần dùng tới) */
 export interface TgWebApp {
   initData: string;
+  initDataUnsafe?: { start_param?: string };
   colorScheme: "light" | "dark";
   platform: string;
   ready(): void;
