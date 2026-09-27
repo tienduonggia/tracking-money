@@ -213,3 +213,6 @@ a.btn{text-decoration:none;color:inherit}
 .flex-section{display:grid;gap:12px}
 .hist{display:grid;gap:4px;border-top:1px solid var(--line-soft);padding-top:8px}
 .hist-row{display:grid;grid-template-columns:90px 1fr auto;gap:8px;font-size:13px}
+.nowrap{white-space:nowrap}
+.hist-tr td{background:var(--surface-2)}
+.hist-row4{display:grid;grid-template-columns:90px 1fr auto auto;gap:10px;align-items:center;font-size:13px;padding:2px 0}

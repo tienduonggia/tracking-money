@@ -190,3 +190,25 @@ test("lifetime gồm tích luỹ + rút ra đem tiêu", () => {
   assert.equal(L.withdrawn, 107e6);
   assert.equal(Math.round(L.holding), Math.round(8e6 + flexSim(f, pd("2026-01-21")).interest));
 });
+
+/* ---------- đầu tư: giá vốn bình quân ---------- */
+import { position } from "./calc.ts";
+test("position: mua 2 lần, giá vốn TB; bán 1 phần chốt lời", () => {
+  const b = (date: string, qty: number, price: number, fee = 0) => ({ id: date, date, kind: "buy" as const, qty, price, fee, note: "" });
+  const s = (date: string, qty: number, price: number, fee = 0) => ({ id: date + "s", date, kind: "sell" as const, qty, price, fee, note: "" });
+  const p1 = position([b("2026-06-01", 2, 11e6), b("2026-09-01", 3, 12e6)]);
+  assert.equal(p1.qty, 5); assert.equal(p1.cost, 58e6); assert.equal(p1.avg, 11.6e6);
+  const p2 = position([b("2026-06-01", 2, 11e6), b("2026-09-01", 3, 12e6), s("2026-10-01", 1, 13e6)]);
+  assert.equal(p2.qty, 4); assert.equal(Math.round(p2.cost), 46.4e6); assert.equal(Math.round(p2.realized), 1.4e6);
+  assert.equal(Math.round(p2.avg), 11.6e6);
+  // phí mua cộng vào vốn, phí bán trừ vào tiền thu
+  const p3 = position([b("2026-01-01", 1, 10e6, 100_000), s("2026-02-01", 1, 11e6, 50_000)]);
+  assert.equal(p3.qty, 0); assert.equal(Math.round(p3.realized), 11e6 - 50_000 - 10.1e6);
+});
+test("parseHoldingTxns: chặn bán vượt số lượng", async () => {
+  const { parseHolding, ValidationError } = await import("./validate.ts");
+  const txns = [{ date: "2026-01-01", kind: "buy", qty: 1, price: 10 }, { date: "2026-01-02", kind: "sell", qty: 2, price: 10 }];
+  assert.throws(() => parseHolding({ type: "gold", name: "Nhẫn", txns }), ValidationError);
+  const ok = parseHolding({ type: "gold", name: "Nhẫn", txns: [{ date: "2026-06-01", kind: "buy", qty: 2, price: 11e6 }, { date: "2026-09-01", kind: "buy", qty: 3, price: 12e6 }], priceSource: "vangtoday:DOJINHTV:chi" });
+  assert.equal(ok.qty, 5); assert.equal(ok.cost, 58e6); assert.equal(ok.priceSource, "vangtoday:DOJINHTV:chi");
+});

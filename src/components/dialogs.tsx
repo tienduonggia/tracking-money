@@ -1,8 +1,9 @@
 "use client";
 import { useMemo, useState } from "react";
-import type { Deposit, DepositInput, Holding, HoldingInput, HoldingType, Tier } from "@/lib/types.ts";
+import type { Deposit, DepositInput, Holding, HoldingInput, HoldingTxn, HoldingType, Tier } from "@/lib/types.ts";
+import { GOLD_CODES } from "@/lib/gold.ts";
 import {
-  PRESETS, capitalOf, accrued, addMonths, days, dstr, earlyInterest, effectiveRate, expGross, fd, fmt2, money, netClosed, pd, segments, signed,
+  PRESETS, capitalOf, position, accrued, addMonths, days, dstr, earlyInterest, effectiveRate, expGross, fd, fmt2, money, netClosed, pd, segments, signed,
   termDays, today,
 } from "@/lib/calc.ts";
 import { Modal, MoneyInput, Confirm } from "./ui.tsx";
@@ -449,39 +450,62 @@ export function HoldingDialog({ draft, places, onClose, onSave, onDelete }: {
   );
 }
 
+/** Tài sản nhập kiểu cũ (chưa có lịch sử) → một lần mua "số dư ban đầu". */
+export function legacyTxns(h: Pick<Holding, "qty" | "cost" | "priceDate" | "txns">): HoldingTxn[] {
+  if (h.txns?.length) return h.txns;
+  if (!(h.qty > 0)) return [];
+  return [{ id: "init", date: h.priceDate || fd(today()), kind: "buy", qty: h.qty, price: h.cost / h.qty, fee: 0, note: "Số dư ban đầu" }];
+}
+const tid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
 function HoldingForm({ draft, onClose, onSave, onDelete }: {
   draft: HoldingDraft; places: string[]; onClose: () => void;
   onSave: (id: string | undefined, x: HoldingInput) => Promise<boolean>; onDelete: (id: string) => Promise<void>;
 }) {
+  const src = draft.priceSource ?? "";
   const [f, setF] = useState({
-    type: (draft.type ?? "etf") as HoldingType,
+    type: (draft.type ?? "gold") as HoldingType,
     name: draft.name ?? "",
     place: draft.place ?? "",
     qty: draft.qty !== undefined ? String(draft.qty) : "",
-    unit: draft.unit ?? "",
+    unit: draft.unit ?? (draft.type ? "" : "chỉ"),
     cost: (draft.cost ?? null) as number | null,
     price: (draft.price ?? null) as number | null,
-    coinId: (draft.priceSource ?? "").replace(/^coingecko:/, ""),
+    coinId: src.startsWith("coingecko:") ? src.slice(10) : "",
+    goldCode: src.startsWith("vangtoday:") ? src.split(":")[1] : "",
     note: draft.note ?? "",
+    // mua lần đầu (tài sản mới)
+    buyDate: fd(today()), buyQty: "", buyPrice: null as number | null, buyFee: null as number | null,
   });
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
   const cash = f.type === "cash";
-  const qty = Number(f.qty) || 0;
-  const cost = cash ? qty : f.cost || 0;
-  const price = cash ? 1 : f.price || 0;
+  const isNew = !draft.id;
+  const hasTxns = !!draft.txns?.length;
+  const legacy = !isNew && !hasTxns && !cash;
+
+  // Vị thế hiển thị
+  const newTxns: HoldingTxn[] = isNew && !cash && Number(f.buyQty) > 0 && f.buyPrice
+    ? [{ id: tid(), date: f.buyDate, kind: "buy", qty: Number(f.buyQty), price: f.buyPrice, fee: f.buyFee || 0, note: "Mua lần đầu" }] : [];
+  const txns = hasTxns ? draft.txns! : newTxns;
+  const pos = txns.length ? position(txns) : null;
+  const qty = cash ? Number(f.qty) || 0 : pos ? pos.qty : Number(f.qty) || 0;
+  const cost = cash ? qty : pos ? pos.cost : f.cost || 0;
+  const price = cash ? 1 : f.price ?? (isNew ? f.buyPrice ?? 0 : 0);
   const value = qty * price;
-  const autoPrice = f.type === "coin" && !!f.coinId.trim();
+  const unitKey = f.unit.trim().toLowerCase() === "lượng" ? "luong" : "chi";
+  const priceSource = f.type === "coin" && f.coinId.trim() ? `coingecko:${f.coinId.trim().toLowerCase()}`
+    : f.type === "gold" && f.goldCode ? `vangtoday:${f.goldCode}:${unitKey}` : "";
+  const valid = f.name.trim() && (cash ? qty >= 0 : isNew ? newTxns.length > 0 : true);
 
   const submit = async () => {
     setBusy(true);
-    const priceChanged = !draft.id || draft.price !== price;
+    const priceChanged = isNew || draft.price !== price;
     const ok = await onSave(draft.id, {
       type: f.type, name: f.name.trim(), place: f.place.trim(), qty, unit: cash ? "₫" : f.unit.trim(), cost, price,
       priceDate: priceChanged ? fd(today()) : draft.priceDate ?? null,
-      priceSource: autoPrice ? `coingecko:${f.coinId.trim().toLowerCase()}` : "",
-      note: f.note.trim(),
+      priceSource, note: f.note.trim(), txns: cash ? [] : txns,
     });
     setBusy(false);
     if (ok) onClose();
@@ -492,19 +516,45 @@ function HoldingForm({ draft, onClose, onSave, onDelete }: {
       <h3>{draft.id ? "Sửa tài sản" : "Thêm tài sản"}</h3>
       <div className="fields">
         <label className="f">Loại
-          <select id="h_type" value={f.type} onChange={(e) => set("type", e.target.value as HoldingType)}>
-            <option value="etf">ETF / Chứng chỉ quỹ</option><option value="stock">Cổ phiếu</option><option value="coin">Coin</option>
-            <option value="gold">Vàng</option><option value="cash">Tiền mặt / không kỳ hạn</option><option value="other">Khác</option>
+          <select id="h_type" value={f.type} disabled={!isNew} onChange={(e) => { const t = e.target.value as HoldingType; setF((p) => ({ ...p, type: t, unit: t === "gold" ? "chỉ" : p.unit === "chỉ" ? "" : p.unit })); }}>
+            <option value="gold">Vàng</option><option value="etf">ETF / Chứng chỉ quỹ</option><option value="stock">Cổ phiếu</option>
+            <option value="coin">Coin</option><option value="cash">Tiền mặt / tiền chờ</option><option value="other">Khác</option>
           </select>
         </label>
-        <label className="f">Tên / mã<input id="h_name" required value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="E1VFVN30, BTC, SJC…" /></label>
-        <label className="f">Nơi giữ<input id="h_place" list="instList" value={f.place} onChange={(e) => set("place", e.target.value)} placeholder="SSI, Binance, PNJ…" /></label>
-        <label className="f">{cash ? "Số dư (₫)" : "Số lượng"}<input id="h_qty" type="number" step="any" min="0" required value={f.qty} onChange={(e) => set("qty", e.target.value)} /></label>
-        {!cash && <>
-          <label className="f">Đơn vị<input id="h_unit" value={f.unit} onChange={(e) => set("unit", e.target.value)} placeholder="CCQ, BTC, chỉ, lượng…" /></label>
-          <label className="f">Tổng vốn đã bỏ (₫)<MoneyInput id="h_cost" required value={f.cost} onChange={(v) => set("cost", v)} /></label>
-          <label className="f">Giá hiện tại / đơn vị (₫)<MoneyInput id="h_price" required value={f.price} onChange={(v) => set("price", v)} /></label>
+        <label className="f">Tên / mã<input id="h_name" required value={f.name} onChange={(e) => set("name", e.target.value)} placeholder={f.type === "gold" ? "Nhẫn DOJI HTV" : "E1VFVN30, BTC…"} /></label>
+        <label className="f">Nơi giữ<input id="h_place" list="instList" value={f.place} onChange={(e) => set("place", e.target.value)} placeholder="DOJI, SSI, Binance…" /></label>
+        {cash ? (
+          <label className="f">Số dư (₫)<input id="h_qty" type="number" step="any" min="0" value={f.qty} onChange={(e) => set("qty", e.target.value)} /></label>
+        ) : f.type === "gold" ? (
+          <label className="f">Đơn vị
+            <select id="h_unit" value={f.unit || "chỉ"} onChange={(e) => set("unit", e.target.value)}><option value="chỉ">chỉ</option><option value="lượng">lượng</option></select>
+          </label>
+        ) : (
+          <label className="f">Đơn vị<input id="h_unit" value={f.unit} onChange={(e) => set("unit", e.target.value)} placeholder="CCQ, BTC, cp…" /></label>
+        )}
+        {isNew && !cash && <>
+          <label className="f">Ngày mua<input id="h_bdate" type="date" value={f.buyDate} onChange={(e) => set("buyDate", e.target.value)} /></label>
+          <label className="f">Số lượng mua<input id="h_bqty" type="number" step="any" min="0" value={f.buyQty} onChange={(e) => set("buyQty", e.target.value)} /></label>
+          <label className="f">Giá mua / {f.unit || "đơn vị"} (₫)<MoneyInput id="h_bprice" value={f.buyPrice} onChange={(v) => set("buyPrice", v)} /></label>
+          <label className="f">Phí mua (₫) <span className="hint">tuỳ chọn</span><MoneyInput id="h_bfee" value={f.buyFee} onChange={(v) => set("buyFee", v)} /></label>
         </>}
+        {legacy && <>
+          <label className="f">Số lượng<input id="h_qty" type="number" step="any" min="0" value={f.qty} onChange={(e) => set("qty", e.target.value)} /></label>
+          <label className="f">Tổng vốn đã bỏ (₫)<MoneyInput id="h_cost" value={f.cost} onChange={(v) => set("cost", v)} /></label>
+        </>}
+        {!cash && (
+          <label className="f">Giá hiện tại / {f.unit || "đơn vị"} (₫) <span className="hint">{priceSource ? "tự cập nhật mỗi sáng" : "nhập tay"}</span>
+            <MoneyInput id="h_price" value={f.price} onChange={(v) => set("price", v)} placeholder={isNew && f.buyPrice ? fmt2(f.buyPrice) : ""} />
+          </label>
+        )}
+        {f.type === "gold" && (
+          <label className="f full">Giá vàng tự động (vang.today, giá tiệm mua vào)
+            <select id="h_gold" value={f.goldCode} onChange={(e) => set("goldCode", e.target.value)}>
+              <option value="">Không, nhập tay</option>
+              {GOLD_CODES.map((g) => <option key={g.code} value={g.code}>{g.label}</option>)}
+            </select>
+          </label>
+        )}
         {f.type === "coin" && (
           <label className="f">Tự lấy giá (CoinGecko id) <span className="hint">để trống = nhập tay</span>
             <input id="h_coin" list="coinList" value={f.coinId} onChange={(e) => set("coinId", e.target.value)} placeholder="bitcoin" />
@@ -513,18 +563,79 @@ function HoldingForm({ draft, onClose, onSave, onDelete }: {
         )}
         <label className="f full">Ghi chú<input id="h_note" value={f.note} onChange={(e) => set("note", e.target.value)} /></label>
       </div>
+      {hasTxns && <p className="note" style={{ margin: 0 }}>Số lượng và vốn tính từ lịch sử mua bán. Thêm lần mua / bán bằng nút Mua, Bán ở bảng Đầu tư.</p>}
+      {legacy && <p className="note" style={{ margin: 0 }}>Tài sản nhập kiểu cũ. Lần Mua / Bán tiếp theo sẽ tự chuyển số hiện có thành "số dư ban đầu".</p>}
       <div className="calc">
-        <div className="row"><span>Giá vốn trung bình</span><span className="num">{qty && !cash ? money(cost / qty) : "–"}</span></div>
+        {!cash && <div className="row"><span>Đang giữ</span><span className="num">{fmt2(qty)} {f.unit}</span></div>}
+        {!cash && <div className="row"><span>Giá vốn trung bình</span><span className="num">{qty ? money(cost / qty) : "–"}</span></div>}
         <div className="row"><span>Giá trị hiện tại</span><span className="num">{money(value)}</span></div>
-        {!cash && <div className="row total"><span>Lãi / lỗ</span><span className={`num ${value - cost >= 0 ? "pos" : "neg"}`}>{signed(value - cost)}</span></div>}
+        {!cash && <div className="row total"><span>Lời / lỗ chưa chốt</span><span className={`num ${value - cost >= 0 ? "pos" : "neg"}`}>{signed(value - cost)}</span></div>}
       </div>
       <div className="dlg-actions">
         {draft.id && <button type="button" className="btn ghost danger left" onClick={() => setConfirmDel(true)}>Xoá</button>}
         <button type="button" className="btn" onClick={onClose}>Huỷ</button>
-        <button type="button" className="btn primary" disabled={!f.name.trim() || busy} onClick={submit}>{busy ? "Đang lưu…" : "Lưu"}</button>
+        <button type="button" className="btn primary" disabled={!valid || busy} onClick={submit}>{busy ? "Đang lưu…" : "Lưu"}</button>
       </div>
-      <Confirm open={confirmDel} title="Xoá tài sản?" text={`Xoá ${f.name}. Không hoàn tác được.`} okLabel="Xoá"
+      <Confirm open={confirmDel} title="Xoá tài sản?" text={`Xoá ${f.name} cùng lịch sử mua bán. Không hoàn tác được.`} okLabel="Xoá"
         onClose={() => setConfirmDel(false)} onOk={async () => { await onDelete(draft.id!); onClose(); }} />
+    </>
+  );
+}
+
+/* ======================= Mua / Bán thêm ======================= */
+export function HoldingTxnDialog({ target, onClose, onSave }: {
+  target: { h: Holding; kind: "buy" | "sell" } | null; onClose: () => void;
+  onSave: (h: Holding, txns: HoldingTxn[]) => Promise<boolean>;
+}) {
+  return (
+    <Modal open={!!target} onClose={onClose}>
+      {target && <HoldingTxnForm key={target.h.id + target.kind} h={target.h} kind={target.kind} onClose={onClose} onSave={onSave} />}
+    </Modal>
+  );
+}
+
+function HoldingTxnForm({ h, kind, onClose, onSave }: { h: Holding; kind: "buy" | "sell"; onClose: () => void; onSave: (h: Holding, txns: HoldingTxn[]) => Promise<boolean> }) {
+  const base = legacyTxns(h);
+  const before = position(base);
+  const [date, setDate] = useState(fd(today()));
+  const [qty, setQty] = useState("");
+  const [price, setPrice] = useState<number | null>(h.price || null);
+  const [fee, setFee] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const q = Number(qty) || 0;
+  const txn: HoldingTxn = { id: tid(), date, kind, qty: q, price: price || 0, fee: fee || 0, note: "" };
+  const after = q > 0 && price ? position([...base, txn]) : before;
+  const over = kind === "sell" && q > before.qty + 1e-9;
+  const valid = q > 0 && !!price && !!date && !over;
+  const submit = async () => {
+    setBusy(true);
+    const ok = await onSave(h, [...base, txn]);
+    setBusy(false);
+    if (ok) onClose();
+  };
+  return (
+    <>
+      <h3>{kind === "buy" ? "Mua thêm" : "Bán"} · {h.name}</h3>
+      <div className="note num">Đang giữ {fmt2(before.qty)} {h.unit} · giá vốn TB {money(before.avg)}</div>
+      <div className="fields">
+        <label className="f">Ngày<input id="t_date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        <label className="f">Số lượng ({h.unit || "đơn vị"})
+          <input id="t_qty" type="number" step="any" min="0" value={qty} onChange={(e) => setQty(e.target.value)} />
+          {kind === "sell" && <button type="button" className="btn small ghost" style={{ justifySelf: "start" }} onClick={() => setQty(String(before.qty))}>Bán hết</button>}
+        </label>
+        <label className="f">Giá {kind === "buy" ? "mua" : "bán"} / {h.unit || "đơn vị"} (₫)<MoneyInput id="t_price" value={price} onChange={setPrice} /></label>
+        <label className="f">Phí (₫) <span className="hint">tuỳ chọn</span><MoneyInput id="t_fee" value={fee} onChange={setFee} /></label>
+      </div>
+      <div className="calc">
+        <div className="row"><span>{kind === "buy" ? "Tiền mua" : "Tiền thu về"}</span><span className="num">{money(kind === "buy" ? q * (price || 0) + (fee || 0) : q * (price || 0) - (fee || 0))}</span></div>
+        {kind === "sell" && <div className="row total"><span>Lời / lỗ chốt lần này</span><span className={`num ${after.realized - before.realized >= 0 ? "pos" : "neg"}`}>{signed(after.realized - before.realized)}</span></div>}
+        <div className="row"><span>Sau giao dịch</span><span className="num">{fmt2(after.qty)} {h.unit} · giá vốn TB {money(after.avg)}</span></div>
+        {over && <div className="row neg"><span>Bán vượt số đang giữ</span><span /></div>}
+      </div>
+      <div className="dlg-actions">
+        <button type="button" className="btn" onClick={onClose}>Huỷ</button>
+        <button type="button" className="btn primary" disabled={!valid || busy} onClick={submit}>{busy ? "Đang lưu…" : kind === "buy" ? "Ghi lần mua" : "Ghi lần bán"}</button>
+      </div>
     </>
   );
 }

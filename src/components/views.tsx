@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { Deposit, FlexAccount, FlexTxnKind, Holding } from "@/lib/types.ts";
+import type { Deposit, FlexAccount, FlexTxnKind, Holding, HoldingTxn } from "@/lib/types.ts";
 import { FlexSection } from "./flex.tsx";
 import {
-  TYPES, TYPE_ORDER, accrued, currentSegment, days, flexSim, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
+  TYPES, TYPE_ORDER, accrued, currentSegment, days, flexSim, holdingPosition, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
   termDays, totals, yearStats, fmt, fd, pendingPayouts, lifetime,
 } from "@/lib/calc.ts";
 
@@ -350,48 +350,86 @@ function ClosedTable({ list, onEdit, pendingIds, onPayout }: {
 }
 
 /* ======================= Invest ======================= */
-export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, refreshing }: {
+export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, refreshing, onTrade, onSaveTxns }: {
   hold: Holding[]; deps: Deposit[]; flex: FlexAccount[]; t: number; onEdit: (h: Holding) => void;
   onQuickPrice: (h: Holding, price: number) => Promise<void>; onRefresh: () => void; refreshing: boolean;
+  onTrade: (h: Holding, kind: "buy" | "sell") => void; onSaveTxns: (h: Holding, txns: HoldingTxn[]) => Promise<boolean>;
 }) {
   const T = totals(deps, hold, t, flex);
-  const pl = T.invVal - T.invCost;
-  const rows = [...hold].sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type) || b.qty * b.price - a.qty * a.price);
+  const [openHist, setOpenHist] = useState<string | null>(null);
+  const inv = hold.filter((h) => h.type !== "cash");
+  const cashRows = hold.filter((h) => h.type === "cash");
+  const pos = new Map(inv.map((h) => [h.id, holdingPosition(h)]));
+  const invCost = inv.reduce((s, h) => s + pos.get(h.id)!.cost, 0);
+  const realized = inv.reduce((s, h) => s + pos.get(h.id)!.realized, 0);
+  const pl = T.invVal - invCost;
+  const rows = [...inv].sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type) || b.qty * b.price - a.qty * a.price);
   const hasAuto = hold.some((h) => h.priceSource);
   return (
     <section className="view">
       <div className="yearstrip" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
-        <Strip k="Giá trị hiện tại" v={money(T.invVal)} d="không gồm tiền mặt" />
-        <Strip k="Tổng vốn" v={money(T.invCost)} d="" />
-        <Strip k="Lãi / lỗ chưa chốt" v={signed(pl)} d={T.invCost ? `${pl >= 0 ? "+" : ""}${fmt2((pl / T.invCost) * 100)}%` : ""} c={pl >= 0 ? "pos" : "neg"} />
-        <Strip k="Tiền mặt / không kỳ hạn" v={money(T.cash)} d="" />
+        <Strip k="Giá trị hiện tại" v={money(T.invVal)} d="theo giá hiện tại" />
+        <Strip k="Vốn đang đầu tư" v={money(invCost)} d="giá vốn của phần đang giữ" />
+        <Strip k="Lời / lỗ chưa chốt" v={signed(pl)} d={invCost ? `${pl >= 0 ? "+" : ""}${fmt2((pl / invCost) * 100)}%` : ""} c={pl >= 0 ? "pos" : "neg"} />
+        <Strip k="Lời / lỗ đã chốt" v={signed(realized)} d="từ các lần bán" c={realized >= 0 ? "pos" : "neg"} />
       </div>
       <div className="toolbar">
-        <button className="btn" onClick={onRefresh} disabled={!hasAuto || refreshing}>{refreshing ? "Đang lấy giá…" : "Cập nhật giá coin tự động"}</button>
-        <span className="note">{hasAuto ? "Coin có CoinGecko id tự cập nhật mỗi sáng." : "Gắn CoinGecko id cho coin để tự lấy giá."} Giá vàng, ETF: bấm vào ô giá để sửa.</span>
+        <button className="btn" onClick={onRefresh} disabled={!hasAuto || refreshing}>{refreshing ? "Đang lấy giá…" : "Cập nhật giá tự động"}</button>
+        <span className="note">{hasAuto ? "Vàng (vang.today) và coin (CoinGecko) có nguồn giá sẽ tự cập nhật mỗi sáng." : "Sửa tài sản để chọn nguồn giá tự động."} Bấm vào ô giá để sửa tay.</span>
       </div>
       <div className="tbl-wrap">
         <table>
-          <thead><tr><th>Tài sản</th><th>Loại</th><th className="r">Số lượng</th><th className="r">Giá vốn TB</th><th className="r">Giá hiện tại</th><th className="r">Giá trị</th><th className="r">Lãi / lỗ</th><th /></tr></thead>
+          <thead><tr><th>Tài sản</th><th className="r">Đang giữ</th><th className="r">Giá vốn TB</th><th className="r">Giá hiện tại</th><th className="r">Giá trị</th><th className="r">Chưa chốt</th><th className="r">Đã chốt</th><th /></tr></thead>
           <tbody>
-            {rows.length ? rows.map((h) => {
-              const v = h.qty * h.price, p = v - h.cost, cash = h.type === "cash";
-              return (
+            {rows.length ? rows.flatMap((h) => {
+              const P = pos.get(h.id)!;
+              const v = h.qty * h.price, p = v - P.cost;
+              const hist = [...(h.txns || [])].sort((x, y) => pd(y.date) - pd(x.date));
+              const out = [
                 <tr key={h.id}>
-                  <td><b>{h.name}</b><div className="s">{h.place}</div></td>
-                  <td><span className="pill mute"><span style={{ width: 8, height: 8, borderRadius: 2, background: TYPES[h.type].color, display: "inline-block" }} />{TYPES[h.type].label}</span></td>
-                  <td className="r num">{cash ? "–" : `${fmt2(h.qty)} ${h.unit}`}</td>
-                  <td className="r num">{cash || !h.qty ? "–" : money(h.cost / h.qty)}</td>
-                  <td className="r num">{cash ? "–" : <PriceCell h={h} onSave={onQuickPrice} />}</td>
+                  <td><b>{h.name}</b><div className="s"><span style={{ width: 8, height: 8, borderRadius: 2, background: TYPES[h.type].color, display: "inline-block", marginRight: 4 }} />{TYPES[h.type].label}{h.place ? ` · ${h.place}` : ""}</div></td>
+                  <td className="r num">{fmt2(h.qty)} {h.unit}</td>
+                  <td className="r num">{h.qty ? money(P.avg) : "–"}</td>
+                  <td className="r num"><PriceCell h={h} onSave={onQuickPrice} /></td>
                   <td className="r num"><b>{money(v)}</b></td>
-                  <td className={`r num ${cash ? "" : p >= 0 ? "pos" : "neg"}`}>{cash ? "–" : <>{signed(p)}<div className="s">{h.cost ? `${p >= 0 ? "+" : ""}${fmt2((p / h.cost) * 100)}%` : ""}</div></>}</td>
-                  <td className="r"><button className="btn small ghost" onClick={() => onEdit(h)}>Sửa</button></td>
-                </tr>
+                  <td className={`r num ${p >= 0 ? "pos" : "neg"}`}>{signed(p)}<div className="s">{P.cost ? `${p >= 0 ? "+" : ""}${fmt2((p / P.cost) * 100)}%` : ""}</div></td>
+                  <td className={`r num ${P.realized >= 0 ? "pos" : "neg"}`}>{P.realized ? signed(P.realized) : "–"}</td>
+                  <td className="r nowrap">
+                    <button className="btn small" onClick={() => onTrade(h, "buy")}>Mua</button>{" "}
+                    <button className="btn small" disabled={!h.qty} onClick={() => onTrade(h, "sell")}>Bán</button>{" "}
+                    <button className="btn small ghost" onClick={() => setOpenHist(openHist === h.id ? null : h.id)}>{openHist === h.id ? "Ẩn" : "Lịch sử"}</button>
+                    <button className="btn small ghost" onClick={() => onEdit(h)}>Sửa</button>
+                  </td>
+                </tr>,
+              ];
+              if (openHist === h.id) out.push(
+                <tr key={h.id + "-h"} className="hist-tr"><td colSpan={8}>
+                  {hist.length ? hist.map((x) => (
+                    <div className="hist-row4 num" key={x.id}>
+                      <span>{dstr(x.date)}</span>
+                      <span className={x.kind === "buy" ? "" : "pos"}>{x.kind === "buy" ? "Mua" : "Bán"} {fmt2(x.qty)} {h.unit} × {money(x.price)}{x.fee ? ` · phí ${money(x.fee)}` : ""}{x.note ? ` · ${x.note}` : ""}</span>
+                      <span>{money(x.kind === "buy" ? x.qty * x.price + x.fee : x.qty * x.price - x.fee)}</span>
+                      <button className="btn small ghost danger" aria-label="Xoá giao dịch" onClick={() => onSaveTxns(h, (h.txns || []).filter((y) => y.id !== x.id))}>Xoá</button>
+                    </div>
+                  )) : <div className="empty">Chưa có lịch sử. Tài sản nhập kiểu cũ: lần Mua/Bán tới sẽ tạo "số dư ban đầu" từ số hiện có.</div>}
+                </td></tr>,
               );
+              return out;
             }) : <tr><td colSpan={8} className="empty">Chưa có tài sản đầu tư. Bấm “+ Tài sản” để thêm.</td></tr>}
           </tbody>
         </table>
       </div>
+      {cashRows.length > 0 && (
+        <div className="tbl-wrap">
+          <table>
+            <thead><tr><th>Tiền chờ / tiền mặt</th><th className="r">Số dư</th><th /></tr></thead>
+            <tbody>{cashRows.map((h) => (
+              <tr key={h.id}><td><b>{h.name}</b><div className="s">{h.place}</div></td><td className="r num"><b>{money(h.qty)}</b></td>
+                <td className="r"><button className="btn small ghost" onClick={() => onEdit(h)}>Sửa</button></td></tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

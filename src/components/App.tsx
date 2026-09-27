@@ -1,13 +1,13 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Deposit, DepositInput, FlexAccount, FlexInput, FlexTxn, FlexTxnKind, Holding, HoldingInput } from "@/lib/types.ts";
+import type { Deposit, DepositInput, FlexAccount, FlexInput, FlexTxn, FlexTxnKind, Holding, HoldingInput, HoldingTxn } from "@/lib/types.ts";
 import { dstr, fd, money, today } from "@/lib/calc.ts";
 import { api, ApiError, getToken, setToken, tg } from "@/lib/client.ts";
 import { ToastProvider, TipLayer, useToast } from "./ui.tsx";
 import { ApproveDialog, PairLogin } from "./pairing.tsx";
 import { FlexDialog, FlexTxnDialog, type CashLink } from "./flex.tsx";
 import { Overview, Savings, Invest } from "./views.tsx";
-import { CloseDialog, DepositDialog, HoldingDialog, PayoutDialog, renewalDraft, type DepositDraft, type HoldingDraft, type Payout, type Rollover } from "./dialogs.tsx";
+import { CloseDialog, DepositDialog, HoldingDialog, HoldingTxnDialog, PayoutDialog, renewalDraft, type DepositDraft, type HoldingDraft, type Payout, type Rollover } from "./dialogs.tsx";
 
 type Auth =
   | { state: "checking" }
@@ -112,6 +112,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
   const [deps, setDeps] = useState<Deposit[] | null>(null);
   const [hold, setHold] = useState<Holding[] | null>(null);
   const [flex, setFlex] = useState<FlexAccount[] | null>(null);
+  const [tradeFor, setTradeFor] = useState<{ h: Holding; kind: "buy" | "sell" } | null>(null);
   const [flexEdit, setFlexEdit] = useState<FlexAccount | "new" | null>(null);
   const [flexTxnFor, setFlexTxnFor] = useState<{ acc: FlexAccount; kind: FlexTxnKind } | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
@@ -277,6 +278,11 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
     try { await api(`/api/holdings/${id}`, { method: "DELETE" }); setHold((p) => (p || []).filter((h) => h.id !== id)); toast("Đã xoá"); }
     catch (e) { onErr(e); }
   };
+  /** Lưu lịch sử mua/bán; server tự tính lại số lượng và vốn. */
+  const saveHoldTxns = async (h: Holding, txns: HoldingTxn[]) => {
+    const { id, ...rest } = h;
+    return saveHold(id, { ...rest, txns });
+  };
   const quickPrice = async (h: Holding, price: number) => {
     const { id, ...rest } = h;
     await saveHold(id, { ...rest, price, priceDate: fd(today()) });
@@ -332,7 +338,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
           {tab === "overview" && <Overview deps={deps} hold={hold} flex={flex} t={t} range={range} years={years} setRange={setRange} onCloseDep={setClosing} onPayout={setPayoutFor} />}
           {tab === "savings" && <Savings deps={deps} flex={flex} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} onPayout={setPayoutFor}
             onFlexAdd={() => setFlexEdit("new")} onFlexEdit={setFlexEdit} onFlexTxn={(acc, kind) => setFlexTxnFor({ acc, kind })} />}
-          {tab === "invest" && <Invest hold={hold} deps={deps} flex={flex} t={t} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
+          {tab === "invest" && <Invest hold={hold} deps={deps} flex={flex} t={t} onTrade={(h, kind) => setTradeFor({ h, kind })} onSaveTxns={saveHoldTxns} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
         </>
       )}
 
@@ -356,6 +362,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
       <ApproveDialog open={approve !== null} initialCode={approve || ""} onClose={() => setApprove(null)} toast={toast} />
       <FlexDialog acc={flexEdit} cashAccounts={(hold || []).filter((h) => h.type === "cash" && h.qty > 0)} onClose={() => setFlexEdit(null)} onSave={saveFlex} onDelete={delFlex} />
       <FlexTxnDialog target={flexTxnFor} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setFlexTxnFor(null)} onConfirm={flexTxn} />
+      <HoldingTxnDialog target={tradeFor} onClose={() => setTradeFor(null)} onSave={saveHoldTxns} />
       <HoldingDialog draft={holdDraft} places={places} onClose={() => setHoldDraft(null)} onSave={saveHold} onDelete={delHold} />
     </div>
   );

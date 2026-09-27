@@ -1,6 +1,6 @@
 // Validate & chuẩn hoá input từ client. Thuần TS, test được độc lập.
-import type { Compounding, DepositInput, FlexInput, FlexTxn, HoldingInput, HoldingType, Tier } from "./types.ts";
-import { addMonths, effectiveRate } from "./calc.ts";
+import type { Compounding, DepositInput, FlexInput, FlexTxn, HoldingInput, HoldingTxn, HoldingType, Tier } from "./types.ts";
+import { addMonths, effectiveRate, position } from "./calc.ts";
 
 export class ValidationError extends Error {}
 
@@ -81,20 +81,23 @@ export function parseHolding(b: Record<string, unknown>): HoldingInput {
   if (!type) throw new ValidationError("Loại tài sản không hợp lệ");
   const name = str(b.name, 100);
   if (!name) throw new ValidationError("Thiếu tên tài sản");
-  const qty = num(b.qty, "Số lượng");
+  const qty = Array.isArray(b.txns) && b.txns.length ? 0 : num(b.qty, "Số lượng");
   const cash = type === "cash";
   const priceSource = str(b.priceSource, 100);
-  if (priceSource && !/^coingecko:[a-z0-9-]+$/.test(priceSource)) throw new ValidationError("Nguồn giá không hợp lệ");
+  if (priceSource && !/^(coingecko:[a-z0-9-]+|vangtoday:[A-Z0-9]+:(chi|luong))$/.test(priceSource)) throw new ValidationError("Nguồn giá không hợp lệ");
+  const txns = cash ? [] : parseHoldingTxns(b.txns);
+  const pos = txns.length ? position(txns) : null;
   return {
     type,
     name,
     place: str(b.place, 100),
-    qty,
+    qty: pos ? pos.qty : qty,
     unit: cash ? "₫" : str(b.unit, 30),
-    cost: cash ? Math.round(qty) : Math.round(num(b.cost ?? 0, "Tổng vốn")),
+    cost: cash ? Math.round(qty) : pos ? Math.round(pos.cost) : Math.round(num(b.cost ?? 0, "Tổng vốn")),
     price: cash ? 1 : num(b.price ?? 0, "Giá"),
     priceDate: optDate(b.priceDate, "Ngày giá"),
     priceSource: cash ? "" : priceSource,
+    txns,
     note: str(b.note, 500),
   };
 }
@@ -124,4 +127,31 @@ export function parseFlex(b: Record<string, unknown>): FlexInput {
     return { id, date: date(x.date, `Giao dịch #${i + 1}: ngày`), kind, amount, external: kind === "adjust" ? false : x.external !== false, note: str(x.note, 200) };
   });
   return { institution, name: str(b.name, 100), compounding, taxPct: num(b.taxPct ?? 0, "Thuế", { max: 100 }), rates, txns, note: str(b.note, 500) };
+}
+
+/** Lịch sử mua/bán: tối đa 1000 dòng; không cho bán quá số đang giữ. */
+export function parseHoldingTxns(v: unknown): HoldingTxn[] {
+  if (v === null || v === undefined) return [];
+  if (!Array.isArray(v) || v.length > 1000) throw new ValidationError("Lịch sử giao dịch không hợp lệ");
+  const txns = v.map((t, i) => {
+    const x = (t ?? {}) as Record<string, unknown>;
+    const kind = x.kind === "buy" || x.kind === "sell" ? x.kind : null;
+    if (!kind) throw new ValidationError(`Giao dịch #${i + 1}: loại không hợp lệ`);
+    return {
+      id: typeof x.id === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(x.id) ? x.id : `h${i}-${Date.now().toString(36)}`,
+      date: date(x.date, `Giao dịch #${i + 1}: ngày`),
+      kind,
+      qty: num(x.qty, `Giao dịch #${i + 1}: số lượng`, { min: 1e-12 }),
+      price: num(x.price, `Giao dịch #${i + 1}: giá`),
+      fee: num(x.fee ?? 0, `Giao dịch #${i + 1}: phí`),
+      note: str(x.note, 200),
+    } as HoldingTxn;
+  });
+  // kiểm tra không bán vượt số lượng theo thứ tự thời gian
+  let q = 0;
+  for (const x of [...txns].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.kind === "buy" ? -1 : 1))) {
+    q += x.kind === "buy" ? x.qty : -x.qty;
+    if (q < -1e-9) throw new ValidationError(`Bán ${x.qty} ngày ${x.date} vượt số lượng đang giữ`);
+  }
+  return txns;
 }

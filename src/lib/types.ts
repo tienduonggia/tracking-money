@@ -31,6 +31,17 @@ export interface Deposit {
   newMoney: number | null; // phần gốc là vốn mới bỏ vào; null = suy ra (tái tục → 0, còn lại → cả gốc)
 }
 
+/** Một lần mua / bán tài sản. price = giá mỗi đơn vị (VND), fee = phí giao dịch. */
+export interface HoldingTxn {
+  id: string;
+  date: string;
+  kind: "buy" | "sell";
+  qty: number;
+  price: number;
+  fee: number;
+  note: string;
+}
+
 export type HoldingType = "etf" | "stock" | "coin" | "gold" | "cash" | "other";
 
 export interface Holding {
@@ -43,7 +54,8 @@ export interface Holding {
   cost: number;
   price: number;
   priceDate: string | null;
-  priceSource: string; // '' | 'coingecko:<id>'
+  priceSource: string; // '' | 'coingecko:<id>' | 'vangtoday:<CODE>:<chi|luong>'
+  txns: HoldingTxn[]; // rỗng = tài sản nhập kiểu cũ (qty/cost nhập tay)
   note: string;
 }
 

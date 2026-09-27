@@ -51,6 +51,8 @@ create table if not exists holdings (
   updated_at    timestamptz   not null default now()
 );
 create index if not exists holdings_owner_idx on holdings (owner_id);
+-- Lịch sử mua/bán; khi có thì qty/cost suy ra từ đây (bình quân gia quyền)
+alter table holdings add column if not exists txns jsonb not null default '[]';
 
 -- Đăng nhập website bằng mã, xác nhận từ Mini App (kiểu "đăng nhập TV")
 create table if not exists login_codes (

@@ -41,6 +41,7 @@ const toHolding = (r: Row): Holding => ({
   price: Number(r.price),
   priceDate: d(r.price_date),
   priceSource: r.price_source as string,
+  txns: (r.txns as Holding["txns"]) ?? [],
   note: r.note as string,
 });
 
@@ -58,7 +59,8 @@ const depRow = (s: Sql, x: DepositInput) => ({
   payout: x.payout ?? null,
   new_money: x.newMoney ?? null,
 });
-const holdRow = (x: HoldingInput) => ({
+const holdRow = (s: Sql, x: HoldingInput) => ({
+  txns: s.json((x.txns ?? []) as unknown as Parameters<Sql["json"]>[0]),
   type: x.type, name: x.name, place: x.place, qty: x.qty, unit: x.unit, cost: x.cost, price: x.price,
   price_date: x.priceDate, price_source: x.priceSource, note: x.note,
 });
@@ -87,7 +89,7 @@ export async function deleteDeposit(owner: number, id: string): Promise<boolean>
 }
 
 /* ---------- holdings ---------- */
-const HOLD_COLS = (s: Sql) => s`id, type, name, place, qty, unit, cost, price, price_date::text, price_source, note`;
+const HOLD_COLS = (s: Sql) => s`id, type, name, place, qty, unit, cost, price, price_date::text, price_source, note, txns`;
 
 export async function listHoldings(owner: number): Promise<Holding[]> {
   const s = sql();
@@ -96,12 +98,12 @@ export async function listHoldings(owner: number): Promise<Holding[]> {
 }
 export async function createHolding(owner: number, x: HoldingInput): Promise<Holding> {
   const s = sql();
-  const [r] = await s`insert into holdings ${s({ ...holdRow(x), owner_id: owner })} returning ${HOLD_COLS(s)}`;
+  const [r] = await s`insert into holdings ${s({ ...holdRow(s, x), owner_id: owner })} returning ${HOLD_COLS(s)}`;
   return toHolding(r);
 }
 export async function updateHolding(owner: number, id: string, x: HoldingInput): Promise<Holding | null> {
   const s = sql();
-  const [r] = await s`update holdings set ${s(holdRow(x))}, updated_at = now()
+  const [r] = await s`update holdings set ${s(holdRow(s, x))}, updated_at = now()
     where id = ${id} and owner_id = ${owner} returning ${HOLD_COLS(s)}`;
   return r ? toHolding(r) : null;
 }
@@ -114,8 +116,8 @@ export async function deleteHolding(owner: number, id: string): Promise<boolean>
 export async function autoPricedHoldings(owner?: number) {
   const s = sql();
   const rows = owner === undefined
-    ? await s`select id, price_source from holdings where price_source like 'coingecko:%'`
-    : await s`select id, price_source from holdings where price_source like 'coingecko:%' and owner_id = ${owner}`;
+    ? await s`select id, price_source from holdings where price_source <> ''`
+    : await s`select id, price_source from holdings where price_source <> '' and owner_id = ${owner}`;
   return rows.map((r) => ({ id: r.id as string, source: r.price_source as string }));
 }
 export async function setPrice(id: string, price: number, date: string) {
@@ -135,7 +137,7 @@ export async function depositsDueWithin(daysAhead: number, todayStr: string) {
 export async function importAll(owner: number, deps: DepositInput[], holds: HoldingInput[]) {
   return sql().begin(async (tx) => {
     for (const x of deps) await tx`insert into deposits ${tx({ ...depRow(tx as unknown as Sql, { ...x, renewedFrom: null }), owner_id: owner })}`;
-    for (const x of holds) await tx`insert into holdings ${tx({ ...holdRow(x), owner_id: owner })}`;
+    for (const x of holds) await tx`insert into holdings ${tx({ ...holdRow(tx as unknown as Sql, x), owner_id: owner })}`;
     return { deposits: deps.length, holdings: holds.length };
   });
 }

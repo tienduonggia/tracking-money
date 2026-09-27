@@ -1,5 +1,5 @@
 // Domain logic dùng chung cho client và server. Không import gì từ Node/React.
-import type { Deposit, FlexAccount, Holding, HoldingType, Tier } from "./types.ts";
+import type { Deposit, FlexAccount, Holding, HoldingTxn, HoldingType, Tier } from "./types.ts";
 
 export const DAY = 86_400_000;
 
@@ -324,3 +324,45 @@ export function yearStats(deps: Deposit[], r: string, t: number, flex: FlexAccou
   }
   return { label, closed, gross, tax, fee, net: gross - tax - fee + flexInt, flexInt, accrual, lost, early: earlies.length, buckets };
 }
+
+/* ---------- Đầu tư: giá vốn bình quân gia quyền ---------- */
+export interface Position {
+  qty: number; // số lượng đang giữ
+  cost: number; // vốn của phần đang giữ
+  avg: number; // giá vốn trung bình
+  realized: number; // lời/lỗ đã chốt khi bán
+  invested: number; // tổng tiền đã bỏ ra mua (gồm phí)
+  proceeds: number; // tổng tiền thu về khi bán (đã trừ phí)
+}
+
+/**
+ * Mua: cộng số lượng, vốn += qty × giá + phí.
+ * Bán: vốn giảm theo giá vốn TB × qty; lời đã chốt = qty × giá bán − phí − phần vốn đó.
+ */
+export function position(txns: HoldingTxn[]): Position {
+  const p: Position = { qty: 0, cost: 0, avg: 0, realized: 0, invested: 0, proceeds: 0 };
+  const sorted = [...txns].sort((a, b) => pd(a.date) - pd(b.date) || (a.kind === "buy" ? -1 : 1));
+  for (const x of sorted) {
+    if (x.kind === "buy") {
+      p.qty += x.qty;
+      p.cost += x.qty * x.price + (x.fee || 0);
+      p.invested += x.qty * x.price + (x.fee || 0);
+    } else {
+      const q = Math.min(x.qty, p.qty);
+      const avg = p.qty ? p.cost / p.qty : 0;
+      const out = avg * q;
+      const got = q * x.price - (x.fee || 0);
+      p.realized += got - out;
+      p.proceeds += got;
+      p.qty -= q;
+      p.cost -= out;
+      if (p.qty < 1e-9) { p.qty = 0; p.cost = 0; }
+    }
+    p.avg = p.qty ? p.cost / p.qty : 0;
+  }
+  return p;
+}
+
+/** Vị thế của một tài sản: theo lịch sử nếu có, không thì theo số nhập tay. */
+export const holdingPosition = (h: Holding): Position =>
+  h.txns?.length ? position(h.txns) : { qty: h.qty, cost: h.cost, avg: h.qty ? h.cost / h.qty : 0, realized: 0, invested: h.cost, proceeds: 0 };
