@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Deposit, DepositInput, FlexAccount, FlexInput, FlexTxn, FlexTxnKind, Holding, HoldingInput, HoldingTxn } from "@/lib/types.ts";
+import type { Deposit, DepositInput, FlexAccount, FlexInput, FlexTxn, FlexTxnKind, Holding, HoldingInput, HoldingTxn, MarketPrice, MarketPriceInput } from "@/lib/types.ts";
+import { MarketDialog } from "./market.tsx";
 import { dstr, fd, money, today } from "@/lib/calc.ts";
 import { api, ApiError, getToken, setToken, tg } from "@/lib/client.ts";
 import { ToastProvider, TipLayer, useToast } from "./ui.tsx";
@@ -112,6 +113,8 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
   const [deps, setDeps] = useState<Deposit[] | null>(null);
   const [hold, setHold] = useState<Holding[] | null>(null);
   const [flex, setFlex] = useState<FlexAccount[] | null>(null);
+  const [markets, setMarkets] = useState<MarketPrice[]>([]);
+  const [marketEdit, setMarketEdit] = useState<MarketPrice | "new" | null>(null);
   const [tradeFor, setTradeFor] = useState<{ h: Holding; kind: "buy" | "sell" } | null>(null);
   const [flexEdit, setFlexEdit] = useState<FlexAccount | "new" | null>(null);
   const [flexTxnFor, setFlexTxnFor] = useState<{ acc: FlexAccount; kind: FlexTxnKind } | null>(null);
@@ -133,8 +136,8 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
 
   const load = useCallback(async () => {
     try {
-      const [d, h, f] = await Promise.all([api<Deposit[]>("/api/deposits"), api<Holding[]>("/api/holdings"), api<FlexAccount[]>("/api/flex")]);
-      setDeps(d); setHold(h); setFlex(f);
+      const [d, h, f, m] = await Promise.all([api<Deposit[]>("/api/deposits"), api<Holding[]>("/api/holdings"), api<FlexAccount[]>("/api/flex"), api<MarketPrice[]>("/api/market")]);
+      setDeps(d); setHold(h); setFlex(f); setMarkets(m);
     } catch (e) { onErr(e); }
   }, [onErr]);
 
@@ -278,6 +281,30 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
     try { await api(`/api/holdings/${id}`, { method: "DELETE" }); setHold((p) => (p || []).filter((h) => h.id !== id)); toast("Đã xoá"); }
     catch (e) { onErr(e); }
   };
+  /* ---- giá thị trường ---- */
+  const saveMarket = async (id: string | undefined, x: MarketPriceInput) => {
+    try {
+      const r = await api<MarketPrice>(id ? `/api/market/${id}` : "/api/market", { method: id ? "PUT" : "POST", json: x });
+      setMarkets((p) => (p.some((m) => m.id === r.id) ? p.map((m) => (m.id === r.id ? r : m)) : [...p, r]));
+      // server đã đẩy giá xuống các tài sản cùng loại → cập nhật tại chỗ
+      setHold((p) => (p || []).map((h) => (h.priceKey === r.key ? { ...h, price: r.price, priceDate: r.priceDate } : h)));
+      toast(id ? `Đã cập nhật giá ${r.label}` : `Đã thêm loại giá ${r.label}`);
+      return r;
+    } catch (e) { onErr(e); return null; }
+  };
+  const delMarket = async (id: string) => {
+    try {
+      const m = markets.find((x) => x.id === id);
+      await api(`/api/market/${id}`, { method: "DELETE" });
+      setMarkets((p) => p.filter((x) => x.id !== id));
+      if (m) setHold((p) => (p || []).map((h) => (h.priceKey === m.key ? { ...h, priceKey: "" } : h)));
+      toast("Đã xoá loại giá");
+    } catch (e) { onErr(e); }
+  };
+  const marketPrice = async (m: MarketPrice, price: number) => {
+    const { id, ...rest } = m;
+    await saveMarket(id, { ...rest, price, priceDate: fd(today()) });
+  };
   /** Lưu lịch sử mua/bán; server tự tính lại số lượng và vốn. */
   const saveHoldTxns = async (h: Holding, txns: HoldingTxn[]) => {
     const { id, ...rest } = h;
@@ -338,7 +365,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
           {tab === "overview" && <Overview deps={deps} hold={hold} flex={flex} t={t} range={range} years={years} setRange={setRange} onCloseDep={setClosing} onPayout={setPayoutFor} />}
           {tab === "savings" && <Savings deps={deps} flex={flex} cash={(hold || []).filter((h) => h.type === "cash").reduce((s, h) => s + h.qty, 0)} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} onPayout={setPayoutFor}
             onFlexAdd={() => setFlexEdit("new")} onFlexEdit={setFlexEdit} onFlexTxn={(acc, kind) => setFlexTxnFor({ acc, kind })} />}
-          {tab === "invest" && <Invest hold={hold} deps={deps} flex={flex} t={t} onTrade={(h, kind) => setTradeFor({ h, kind })} onSaveTxns={saveHoldTxns} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
+          {tab === "invest" && <Invest hold={hold} deps={deps} flex={flex} t={t} markets={markets} onMarketPrice={marketPrice} onMarketEdit={setMarketEdit} onMarketAdd={() => setMarketEdit("new")} onTrade={(h, kind) => setTradeFor({ h, kind })} onSaveTxns={saveHoldTxns} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
         </>
       )}
 
@@ -362,8 +389,9 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
       <ApproveDialog open={approve !== null} initialCode={approve || ""} onClose={() => setApprove(null)} toast={toast} />
       <FlexDialog acc={flexEdit} cashAccounts={(hold || []).filter((h) => h.type === "cash" && h.qty > 0)} onClose={() => setFlexEdit(null)} onSave={saveFlex} onDelete={delFlex} />
       <FlexTxnDialog target={flexTxnFor} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setFlexTxnFor(null)} onConfirm={flexTxn} />
+      <MarketDialog target={marketEdit} onClose={() => setMarketEdit(null)} onSave={async (id, x) => !!(await saveMarket(id, x))} onDelete={delMarket} />
       <HoldingTxnDialog target={tradeFor} onClose={() => setTradeFor(null)} onSave={saveHoldTxns} />
-      <HoldingDialog draft={holdDraft} places={places} onClose={() => setHoldDraft(null)} onSave={saveHold} onDelete={delHold} />
+      <HoldingDialog draft={holdDraft} places={places} markets={markets} onCreateMarket={(x) => saveMarket(undefined, x)} onClose={() => setHoldDraft(null)} onSave={saveHold} onDelete={delHold} />
     </div>
   );
 }

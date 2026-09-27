@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { Deposit, FlexAccount, FlexTxnKind, Holding, HoldingTxn } from "@/lib/types.ts";
+import type { Deposit, FlexAccount, FlexTxnKind, Holding, HoldingTxn, MarketPrice } from "@/lib/types.ts";
+import { MarketPanel } from "./market.tsx";
 import { FlexSection } from "./flex.tsx";
 import {
   TYPES, TYPE_ORDER, accrued, currentSegment, days, flexSim, holdingPosition, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
@@ -363,7 +364,9 @@ function ClosedTable({ list, onEdit, pendingIds, onPayout }: {
 }
 
 /* ======================= Invest ======================= */
-export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, refreshing, onTrade, onSaveTxns }: {
+export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, refreshing, onTrade, onSaveTxns, markets, onMarketPrice, onMarketEdit, onMarketAdd }: {
+  markets: MarketPrice[]; onMarketPrice: (m: MarketPrice, price: number) => Promise<void>;
+  onMarketEdit: (m: MarketPrice) => void; onMarketAdd: () => void;
   hold: Holding[]; deps: Deposit[]; flex: FlexAccount[]; t: number; onEdit: (h: Holding) => void;
   onQuickPrice: (h: Holding, price: number) => Promise<void>; onRefresh: () => void; refreshing: boolean;
   onTrade: (h: Holding, kind: "buy" | "sell") => void; onSaveTxns: (h: Holding, txns: HoldingTxn[]) => Promise<boolean>;
@@ -373,11 +376,11 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
   const inv = hold.filter((h) => h.type !== "cash");
   const cashRows = hold.filter((h) => h.type === "cash");
   const pos = new Map(inv.map((h) => [h.id, holdingPosition(h)]));
+  const mk = new Map(markets.map((m) => [m.key, m]));
   const invCost = inv.reduce((s, h) => s + pos.get(h.id)!.cost, 0);
   const realized = inv.reduce((s, h) => s + pos.get(h.id)!.realized, 0);
   const pl = T.invVal - invCost;
   const rows = [...inv].sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type) || b.qty * b.price - a.qty * a.price);
-  const hasAuto = hold.some((h) => h.priceSource);
   return (
     <section className="view">
       <div className="yearstrip" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
@@ -386,10 +389,7 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
         <Strip k="Lời / lỗ chưa chốt" v={signed(pl)} d={invCost ? `${pl >= 0 ? "+" : ""}${fmt2((pl / invCost) * 100)}%` : ""} c={pl >= 0 ? "pos" : "neg"} />
         <Strip k="Lời / lỗ đã chốt" v={signed(realized)} d="từ các lần bán" c={realized >= 0 ? "pos" : "neg"} />
       </div>
-      <div className="toolbar">
-        <button className="btn" onClick={onRefresh} disabled={!hasAuto || refreshing}>{refreshing ? "Đang lấy giá…" : "Cập nhật giá tự động"}</button>
-        <span className="note">{hasAuto ? "Vàng (vang.today) và coin (CoinGecko) có nguồn giá sẽ tự cập nhật mỗi sáng." : "Sửa tài sản để chọn nguồn giá tự động."} Bấm vào ô giá để sửa tay.</span>
-      </div>
+      <MarketPanel markets={markets} hold={hold} onSave={onMarketPrice} onEdit={onMarketEdit} onAdd={onMarketAdd} onRefresh={onRefresh} refreshing={refreshing} />
       <div className="tbl-wrap">
         <table>
           <thead><tr><th>Tài sản</th><th className="r">Đang giữ</th><th className="r">Giá vốn TB</th><th className="r">Giá hiện tại</th><th className="r">Giá trị</th><th className="r">Chưa chốt</th><th className="r">Đã chốt</th><th /></tr></thead>
@@ -403,7 +403,9 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
                   <td><b>{h.name}</b><div className="s"><span style={{ width: 8, height: 8, borderRadius: 2, background: TYPES[h.type].color, display: "inline-block", marginRight: 4 }} />{TYPES[h.type].label}{h.place ? ` · ${h.place}` : ""}</div></td>
                   <td className="r num">{fmt2(h.qty)} {h.unit}</td>
                   <td className="r num">{h.qty ? money(P.avg) : "–"}</td>
-                  <td className="r num"><PriceCell h={h} onSave={onQuickPrice} /></td>
+                  <td className="r num">{mk.get(h.priceKey)
+                    ? <>{money(h.price)}<div className="s">theo {mk.get(h.priceKey)!.label}</div></>
+                    : <PriceCell h={h} onSave={onQuickPrice} />}</td>
                   <td className="r num"><b>{money(v)}</b></td>
                   <td className={`r num ${p >= 0 ? "pos" : "neg"}`}>{signed(p)}<div className="s">{P.cost ? `${p >= 0 ? "+" : ""}${fmt2((p / P.cost) * 100)}%` : ""}</div></td>
                   <td className={`r num ${P.realized >= 0 ? "pos" : "neg"}`}>{P.realized ? signed(P.realized) : "–"}</td>

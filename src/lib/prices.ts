@@ -1,5 +1,5 @@
 import "server-only";
-import { autoPricedHoldings, setPrice } from "./repo.ts";
+import { autoMarket, setMarketPrice } from "./repo.ts";
 import { fd, today } from "./calc.ts";
 
 /** Lấy giá VND từ CoinGecko cho danh sách coin id (bitcoin, ethereum, ...). */
@@ -51,7 +51,7 @@ export function parseSource(src: string) {
 
 /** Cập nhật giá cho các tài sản có nguồn giá tự động. Nguồn nào lỗi thì giữ giá cũ. */
 export async function refreshPrices(owner?: number) {
-  const items = (await autoPricedHoldings(owner)).map((i) => ({ ...i, src: parseSource(i.source) })).filter((i) => i.src);
+  const items = (await autoMarket(owner)).map((i) => ({ ...i, src: parseSource(i.source) })).filter((i) => i.src);
   const coinIds = items.flatMap((i) => (i.src!.kind === "coingecko" ? [i.src!.id] : []));
   const goldCodes = items.flatMap((i) => (i.src!.kind === "vangtoday" ? [i.src!.code] : []));
   const errors: string[] = [];
@@ -65,7 +65,7 @@ export async function refreshPrices(owner?: number) {
   for (const it of items) {
     const s = it.src!;
     const price = s.kind === "coingecko" ? coin[s.id] : gold[s.code] ? (s.perChi ? gold[s.code] / 10 : gold[s.code]) : undefined;
-    if (price) { await setPrice(it.id, price, date); updated++; }
+    if (price) { await setMarketPrice(it.id, it.owner, price, date); updated++; }
     else missing.push(s.kind === "coingecko" ? s.id : s.code);
   }
   if (!updated && errors.length) throw new Error(errors.join("; "));

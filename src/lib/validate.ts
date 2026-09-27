@@ -1,5 +1,5 @@
 // Validate & chuẩn hoá input từ client. Thuần TS, test được độc lập.
-import type { Compounding, DepositInput, FlexInput, FlexTxn, HoldingInput, HoldingTxn, HoldingType, Tier } from "./types.ts";
+import type { Compounding, DepositInput, FlexInput, FlexTxn, HoldingInput, HoldingTxn, HoldingType, MarketPriceInput, Tier } from "./types.ts";
 import { addMonths, effectiveRate, position } from "./calc.ts";
 
 export class ValidationError extends Error {}
@@ -98,6 +98,7 @@ export function parseHolding(b: Record<string, unknown>): HoldingInput {
     priceDate: optDate(b.priceDate, "Ngày giá"),
     priceSource: cash ? "" : priceSource,
     txns,
+    priceKey: cash ? "" : str(b.priceKey, 100),
     note: str(b.note, 500),
   };
 }
@@ -154,4 +155,14 @@ export function parseHoldingTxns(v: unknown): HoldingTxn[] {
     if (q < -1e-9) throw new ValidationError(`Bán ${x.qty} ngày ${x.date} vượt số lượng đang giữ`);
   }
   return txns;
+}
+
+/* ---------- Giá thị trường ---------- */
+export function parseMarketPrice(b: Record<string, unknown>): MarketPriceInput {
+  const label = str(b.label, 100);
+  if (!label) throw new ValidationError("Thiếu tên loại tài sản");
+  const source = str(b.source, 100);
+  if (source && !/^(coingecko:[a-z0-9-]+|vangtoday:[A-Z0-9]+:(chi|luong))$/.test(source)) throw new ValidationError("Nguồn giá không hợp lệ");
+  const key = str(b.key, 100) || source || label.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "gia";
+  return { key, label, unit: str(b.unit, 30), source, price: num(b.price ?? 0, "Giá"), priceDate: optDate(b.priceDate, "Ngày giá") };
 }

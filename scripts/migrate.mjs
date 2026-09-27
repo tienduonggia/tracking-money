@@ -13,6 +13,6 @@ console.log(`[migrate] Áp dụng schema lên ${host}`);
 const sql = postgres(url, { max: 1, onnotice: () => {} });
 const schema = await readFile(new URL("../db/schema.sql", import.meta.url), "utf8");
 await sql.unsafe(schema);
-const tables = await sql`select table_name from information_schema.tables where table_schema = current_schema() and table_name in ('deposits','holdings','login_codes','flex_accounts') order by 1`;
+const tables = await sql`select table_name from information_schema.tables where table_schema = current_schema() and table_name in ('deposits','holdings','login_codes','flex_accounts','market_prices') order by 1`;
 console.log(`[migrate] OK — bảng hiện có: ${tables.map((t) => t.table_name).join(", ")}`);
 await sql.end();

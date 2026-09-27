@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
-import type { Deposit, DepositInput, Holding, HoldingInput, HoldingTxn, HoldingType, Tier } from "@/lib/types.ts";
+import type { Deposit, DepositInput, Holding, HoldingInput, HoldingTxn, HoldingType, MarketPrice, MarketPriceInput, Tier } from "@/lib/types.ts";
 import { GOLD_CODES } from "@/lib/gold.ts";
 import {
   PRESETS, capitalOf, position, accrued, addMonths, days, dstr, earlyInterest, effectiveRate, expGross, fd, fmt2, money, netClosed, pd, segments, signed,
@@ -439,13 +439,14 @@ const COINS: [string, string][] = [
   ["ripple", "XRP"], ["the-open-network", "TON"], ["dogecoin", "DOGE"],
 ];
 
-export function HoldingDialog({ draft, places, onClose, onSave, onDelete }: {
-  draft: HoldingDraft | null; places: string[]; onClose: () => void;
+export function HoldingDialog({ draft, places, markets, onClose, onSave, onDelete, onCreateMarket }: {
+  draft: HoldingDraft | null; places: string[]; markets: MarketPrice[]; onClose: () => void;
   onSave: (id: string | undefined, x: HoldingInput) => Promise<boolean>; onDelete: (id: string) => Promise<void>;
+  onCreateMarket: (x: MarketPriceInput) => Promise<MarketPrice | null>;
 }) {
   return (
     <Modal open={!!draft} onClose={onClose}>
-      {draft && <HoldingForm key={draft.id ?? "new"} draft={draft} places={places} onClose={onClose} onSave={onSave} onDelete={onDelete} />}
+      {draft && <HoldingForm key={draft.id ?? "new"} draft={draft} places={places} markets={markets} onClose={onClose} onSave={onSave} onDelete={onDelete} onCreateMarket={onCreateMarket} />}
     </Modal>
   );
 }
@@ -458,9 +459,10 @@ export function legacyTxns(h: Pick<Holding, "qty" | "cost" | "priceDate" | "txns
 }
 const tid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-function HoldingForm({ draft, onClose, onSave, onDelete }: {
-  draft: HoldingDraft; places: string[]; onClose: () => void;
+function HoldingForm({ draft, markets, onClose, onSave, onDelete, onCreateMarket }: {
+  draft: HoldingDraft; places: string[]; markets: MarketPrice[]; onClose: () => void;
   onSave: (id: string | undefined, x: HoldingInput) => Promise<boolean>; onDelete: (id: string) => Promise<void>;
+  onCreateMarket: (x: MarketPriceInput) => Promise<MarketPrice | null>;
 }) {
   const src = draft.priceSource ?? "";
   const [f, setF] = useState({
@@ -479,9 +481,12 @@ function HoldingForm({ draft, onClose, onSave, onDelete }: {
   });
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  // Giá theo: key của Giá thị trường | "__new" (tạo loại giá mới) | "" (giá riêng nhập tay)
+  const [link, setLink] = useState<string>(draft.id ? draft.priceKey ?? "" : "__new");
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
   const cash = f.type === "cash";
   const isNew = !draft.id;
+  const market = markets.find((m) => m.key === link);
   const hasTxns = !!draft.txns?.length;
   const legacy = !isNew && !hasTxns && !cash;
 
@@ -492,20 +497,30 @@ function HoldingForm({ draft, onClose, onSave, onDelete }: {
   const pos = txns.length ? position(txns) : null;
   const qty = cash ? Number(f.qty) || 0 : pos ? pos.qty : Number(f.qty) || 0;
   const cost = cash ? qty : pos ? pos.cost : f.cost || 0;
-  const price = cash ? 1 : f.price ?? (isNew ? f.buyPrice ?? 0 : 0);
+  const price = cash ? 1 : market ? market.price : link === "__new" ? f.price ?? f.buyPrice ?? 0 : f.price ?? (isNew ? f.buyPrice ?? 0 : 0);
   const value = qty * price;
   const unitKey = f.unit.trim().toLowerCase() === "lượng" ? "luong" : "chi";
-  const priceSource = f.type === "coin" && f.coinId.trim() ? `coingecko:${f.coinId.trim().toLowerCase()}`
+  const newSource = f.type === "coin" && f.coinId.trim() ? `coingecko:${f.coinId.trim().toLowerCase()}`
     : f.type === "gold" && f.goldCode ? `vangtoday:${f.goldCode}:${unitKey}` : "";
   const valid = f.name.trim() && (cash ? qty >= 0 : isNew ? newTxns.length > 0 : true);
 
   const submit = async () => {
     setBusy(true);
-    const priceChanged = isNew || draft.price !== price;
+    let key = cash ? "" : link === "__new" ? "" : link;
+    let p = price;
+    const same = markets.find((m) => m.label.trim().toLowerCase() === f.name.trim().toLowerCase());
+    if (!cash && link === "__new" && same) { key = same.key; p = same.price; } // đã có loại giá cùng tên → dùng chung
+    else if (!cash && link === "__new") {
+      // Tạo dòng Giá thị trường mới, giá ban đầu = giá nhập (hoặc giá mua) cho tới khi cập nhật tự động
+      const m = await onCreateMarket({ key: "", label: f.name.trim(), unit: f.unit.trim(), source: newSource, price: p, priceDate: fd(today()) });
+      if (!m) { setBusy(false); return; }
+      key = m.key; p = m.price;
+    }
+    const priceChanged = isNew || draft.price !== p;
     const ok = await onSave(draft.id, {
-      type: f.type, name: f.name.trim(), place: f.place.trim(), qty, unit: cash ? "₫" : f.unit.trim(), cost, price,
+      type: f.type, name: f.name.trim(), place: f.place.trim(), qty, unit: cash ? "₫" : f.unit.trim(), cost, price: p,
       priceDate: priceChanged ? fd(today()) : draft.priceDate ?? null,
-      priceSource, note: f.note.trim(), txns: cash ? [] : txns,
+      priceSource: "", priceKey: key, note: f.note.trim(), txns: cash ? [] : txns,
     });
     setBusy(false);
     if (ok) onClose();
@@ -543,22 +558,32 @@ function HoldingForm({ draft, onClose, onSave, onDelete }: {
           <label className="f">Tổng vốn đã bỏ (₫)<MoneyInput id="h_cost" value={f.cost} onChange={(v) => set("cost", v)} /></label>
         </>}
         {!cash && (
-          <label className="f">Giá hiện tại / {f.unit || "đơn vị"} (₫) <span className="hint">{priceSource ? "tự cập nhật mỗi sáng" : "nhập tay"}</span>
-            <MoneyInput id="h_price" value={f.price} onChange={(v) => set("price", v)} placeholder={isNew && f.buyPrice ? fmt2(f.buyPrice) : ""} />
+          <label className="f full">Giá thị trường theo
+            <select id="h_link" value={link} onChange={(e) => setLink(e.target.value)}>
+              {markets.map((m) => <option key={m.key} value={m.key}>{m.label}: {money(m.price)}{m.unit ? `/${m.unit}` : ""}</option>)}
+              <option value="__new">+ Loại giá mới: {f.name.trim() || "…"}</option>
+              <option value="">Giá riêng cho tài sản này (nhập tay)</option>
+            </select>
+            <span className="hint">Mọi tài sản cùng loại dùng chung một giá ở bảng Giá thị trường (tab Đầu tư).</span>
           </label>
         )}
-        {f.type === "gold" && (
-          <label className="f full">Giá vàng tự động (vang.today, giá tiệm mua vào)
+        {!cash && link === "__new" && f.type === "gold" && (
+          <label className="f full">Tự lấy giá (vang.today, giá tiệm mua vào)
             <select id="h_gold" value={f.goldCode} onChange={(e) => set("goldCode", e.target.value)}>
-              <option value="">Không, nhập tay</option>
+              <option value="">Không, nhập tay ở bảng Giá thị trường</option>
               {GOLD_CODES.map((g) => <option key={g.code} value={g.code}>{g.label}</option>)}
             </select>
           </label>
         )}
-        {f.type === "coin" && (
+        {!cash && link === "__new" && f.type === "coin" && (
           <label className="f">Tự lấy giá (CoinGecko id) <span className="hint">để trống = nhập tay</span>
             <input id="h_coin" list="coinList" value={f.coinId} onChange={(e) => set("coinId", e.target.value)} placeholder="bitcoin" />
             <datalist id="coinList">{COINS.map(([id, s]) => <option key={id} value={id}>{s}</option>)}</datalist>
+          </label>
+        )}
+        {!cash && link === "" && (
+          <label className="f">Giá hiện tại / {f.unit || "đơn vị"} (₫)
+            <MoneyInput id="h_price" value={f.price} onChange={(v) => set("price", v)} placeholder={isNew && f.buyPrice ? fmt2(f.buyPrice) : ""} />
           </label>
         )}
         <label className="f full">Ghi chú<input id="h_note" value={f.note} onChange={(e) => set("note", e.target.value)} /></label>

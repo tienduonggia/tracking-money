@@ -212,3 +212,11 @@ test("parseHoldingTxns: chặn bán vượt số lượng", async () => {
   const ok = parseHolding({ type: "gold", name: "Nhẫn", txns: [{ date: "2026-06-01", kind: "buy", qty: 2, price: 11e6 }, { date: "2026-09-01", kind: "buy", qty: 3, price: 12e6 }], priceSource: "vangtoday:DOJINHTV:chi" });
   assert.equal(ok.qty, 5); assert.equal(ok.cost, 58e6); assert.equal(ok.priceSource, "vangtoday:DOJINHTV:chi");
 });
+
+test("parseMarketPrice: key từ tên tiếng Việt, nguồn hợp lệ", async () => {
+  const { parseMarketPrice, ValidationError } = await import("./validate.ts");
+  const m = parseMarketPrice({ label: "Nhẫn DOJI HTV", unit: "chỉ", price: 12_500_000 });
+  assert.equal(m.key, "nhan-doji-htv");
+  assert.equal(parseMarketPrice({ label: "x", source: "vangtoday:DOJINHTV:chi" }).key, "vangtoday:DOJINHTV:chi");
+  assert.throws(() => parseMarketPrice({ label: "x", source: "http://evil" }), ValidationError);
+});

@@ -56,6 +56,7 @@ export interface Holding {
   priceDate: string | null;
   priceSource: string; // '' | 'coingecko:<id>' | 'vangtoday:<CODE>:<chi|luong>'
   txns: HoldingTxn[]; // rỗng = tài sản nhập kiểu cũ (qty/cost nhập tay)
+  priceKey: string; // liên kết dòng Giá thị trường; '' = giá riêng nhập tay
   note: string;
 }
 
@@ -92,3 +93,15 @@ export interface FlexAccount {
   note: string;
 }
 export type FlexInput = Omit<FlexAccount, "id">;
+
+/** Giá thị trường dùng chung cho các tài sản cùng loại. */
+export interface MarketPrice {
+  id: string;
+  key: string;
+  label: string;
+  unit: string;
+  source: string; // '' nhập tay | 'vangtoday:CODE:chi|luong' | 'coingecko:id'
+  price: number;
+  priceDate: string | null;
+}
+export type MarketPriceInput = Omit<MarketPrice, "id">;

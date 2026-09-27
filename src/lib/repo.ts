@@ -1,6 +1,6 @@
 import "server-only";
 import { sql } from "./db.ts";
-import type { Deposit, DepositInput, FlexAccount, FlexInput, Holding, HoldingInput } from "./types.ts";
+import type { Deposit, DepositInput, FlexAccount, FlexInput, Holding, HoldingInput, MarketPrice, MarketPriceInput } from "./types.ts";
 
 type Row = Record<string, unknown>;
 const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
@@ -42,6 +42,7 @@ const toHolding = (r: Row): Holding => ({
   priceDate: d(r.price_date),
   priceSource: r.price_source as string,
   txns: (r.txns as Holding["txns"]) ?? [],
+  priceKey: (r.price_key as string) ?? "",
   note: r.note as string,
 });
 
@@ -60,6 +61,7 @@ const depRow = (s: Sql, x: DepositInput) => ({
   new_money: x.newMoney ?? null,
 });
 const holdRow = (s: Sql, x: HoldingInput) => ({
+  price_key: x.priceKey ?? "",
   txns: s.json((x.txns ?? []) as unknown as Parameters<Sql["json"]>[0]),
   type: x.type, name: x.name, place: x.place, qty: x.qty, unit: x.unit, cost: x.cost, price: x.price,
   price_date: x.priceDate, price_source: x.priceSource, note: x.note,
@@ -89,7 +91,7 @@ export async function deleteDeposit(owner: number, id: string): Promise<boolean>
 }
 
 /* ---------- holdings ---------- */
-const HOLD_COLS = (s: Sql) => s`id, type, name, place, qty, unit, cost, price, price_date::text, price_source, note, txns`;
+const HOLD_COLS = (s: Sql) => s`id, type, name, place, qty, unit, cost, price, price_date::text, price_source, note, txns, price_key`;
 
 export async function listHoldings(owner: number): Promise<Holding[]> {
   const s = sql();
@@ -178,4 +180,54 @@ export async function updateFlex(owner: number, id: string, x: FlexInput): Promi
 }
 export async function deleteFlex(owner: number, id: string): Promise<boolean> {
   return (await sql()`delete from flex_accounts where id = ${id} and owner_id = ${owner}`).count > 0;
+}
+
+/* ---------- giá thị trường ---------- */
+const MP_COLS = (s: Sql) => s`id, key, label, unit, source, price, price_date::text`;
+const toMP = (r: Row): MarketPrice => ({
+  id: r.id as string, key: r.key as string, label: r.label as string, unit: r.unit as string,
+  source: r.source as string, price: Number(r.price), priceDate: d(r.price_date),
+});
+export async function listMarket(owner: number): Promise<MarketPrice[]> {
+  const s = sql();
+  return (await s`select ${MP_COLS(s)} from market_prices where owner_id = ${owner} order by created_at`).map(toMP);
+}
+/** Tạo/sửa theo key rồi đẩy giá xuống mọi tài sản đang liên kết key đó. */
+export async function upsertMarket(owner: number, x: MarketPriceInput, id?: string): Promise<MarketPrice> {
+  const s = sql();
+  return s.begin(async (tx) => {
+    const row = { key: x.key, label: x.label, unit: x.unit, source: x.source, price: x.price, price_date: x.priceDate };
+    const [r] = id
+      ? await tx`update market_prices set ${tx(row)} where id = ${id} and owner_id = ${owner} returning ${MP_COLS(tx as unknown as Sql)}`
+      : await tx`insert into market_prices ${tx({ ...row, owner_id: owner })}
+          on conflict (owner_id, key) do update set label = excluded.label, unit = excluded.unit, source = excluded.source, price = excluded.price, price_date = excluded.price_date
+          returning ${MP_COLS(tx as unknown as Sql)}`;
+    if (!r) throw new Error("Không tìm thấy dòng giá");
+    await tx`update holdings set price = ${x.price}, price_date = ${x.priceDate}, updated_at = now() where owner_id = ${owner} and price_key = ${r.key}`;
+    return toMP(r);
+  });
+}
+export async function deleteMarket(owner: number, id: string): Promise<boolean> {
+  const s = sql();
+  return s.begin(async (tx) => {
+    const [r] = await tx`delete from market_prices where id = ${id} and owner_id = ${owner} returning key`;
+    if (!r) return false;
+    await tx`update holdings set price_key = '' where owner_id = ${owner} and price_key = ${r.key}`; // tài sản giữ giá cuối, chuyển sang nhập tay
+    return true;
+  });
+}
+/** Các dòng giá có nguồn tự động (mọi owner nếu không truyền) — dùng cho cron. */
+export async function autoMarket(owner?: number) {
+  const s = sql();
+  const rows = owner === undefined
+    ? await s`select id, owner_id, source from market_prices where source <> ''`
+    : await s`select id, owner_id, source from market_prices where source <> '' and owner_id = ${owner}`;
+  return rows.map((r) => ({ id: r.id as string, owner: Number(r.owner_id), source: r.source as string }));
+}
+export async function setMarketPrice(id: string, owner: number, price: number, date: string) {
+  const s = sql();
+  await s.begin(async (tx) => {
+    const [r] = await tx`update market_prices set price = ${price}, price_date = ${date} where id = ${id} returning key`;
+    if (r) await tx`update holdings set price = ${price}, price_date = ${date}, updated_at = now() where owner_id = ${owner} and price_key = ${r.key}`;
+  });
 }

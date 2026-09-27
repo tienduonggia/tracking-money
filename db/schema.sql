@@ -79,3 +79,25 @@ create table if not exists flex_accounts (
   updated_at   timestamptz not null default now()
 );
 create index if not exists flex_owner_idx on flex_accounts (owner_id);
+
+-- Giá thị trường dùng chung: một giá cho mỗi loại tài sản (vd Nhẫn DOJI HTV / chỉ).
+-- source: '' = nhập tay | 'vangtoday:<CODE>:<chi|luong>' | 'coingecko:<id>'
+create table if not exists market_prices (
+  id          uuid primary key default gen_random_uuid(),
+  owner_id    bigint        not null,
+  key         text          not null,
+  label       text          not null,
+  unit        text          not null default '',
+  source      text          not null default '',
+  price       numeric(24,6) not null default 0,
+  price_date  date,
+  created_at  timestamptz   not null default now(),
+  unique (owner_id, key)
+);
+alter table holdings add column if not exists price_key text not null default '';
+-- Chuyển nguồn giá tự động cũ (gắn trên từng tài sản) thành dòng giá dùng chung
+insert into market_prices (owner_id, key, label, unit, source, price, price_date)
+  select distinct on (owner_id, price_source) owner_id, price_source, name, unit, price_source, price, price_date
+  from holdings where price_source <> '' order by owner_id, price_source, updated_at desc
+  on conflict (owner_id, key) do nothing;
+update holdings set price_key = price_source where price_source <> '' and price_key = '';
