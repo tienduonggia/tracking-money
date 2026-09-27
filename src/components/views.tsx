@@ -382,7 +382,10 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
   const pl = T.invVal - invCost;
   // Tổng vàng quy ra chỉ (1 lượng = 10 chỉ)
   const goldChi = inv.filter((h) => h.type === "gold").reduce((s, h) => s + h.qty * (h.unit.trim().toLowerCase() === "lượng" ? 10 : 1), 0);
-  const rows = [...inv].sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type) || b.qty * b.price - a.qty * a.price);
+  // Ngày mua đầu tiên của mỗi tài sản; sắp cũ → mới, tài sản nhập kiểu cũ (không có lịch sử) để cuối
+  const buys = (h: Holding) => (h.txns || []).filter((x) => x.kind === "buy").sort((x, y) => pd(x.date) - pd(y.date));
+  const firstBuy = (h: Holding) => { const b = buys(h); return b.length ? pd(b[0].date) : Infinity; };
+  const rows = [...inv].sort((a, b) => firstBuy(a) - firstBuy(b) || TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type));
   return (
     <section className="view">
       <div className="yearstrip" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
@@ -395,7 +398,7 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
       <MarketPanel markets={markets} hold={hold} onSave={onMarketPrice} onEdit={onMarketEdit} onAdd={onMarketAdd} onRefresh={onRefresh} refreshing={refreshing} />
       <div className="tbl-wrap">
         <table>
-          <thead><tr><th>Tài sản</th><th className="r">Đang giữ</th><th className="r">Giá vốn TB</th><th className="r">Giá hiện tại</th><th className="r">Giá trị</th><th className="r">Chưa chốt</th><th className="r">Đã chốt</th><th /></tr></thead>
+          <thead><tr><th>Tài sản</th><th>Ngày mua</th><th className="r">Đang giữ</th><th className="r">Giá vốn TB</th><th className="r">Giá trị</th><th className="r">Lời / lỗ</th><th /></tr></thead>
           <tbody>
             {rows.length ? rows.flatMap((h) => {
               const P = pos.get(h.id)!;
@@ -404,24 +407,24 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
               const out = [
                 <tr key={h.id}>
                   <td><b>{h.name}</b><div className="s"><span style={{ width: 8, height: 8, borderRadius: 2, background: TYPES[h.type].color, display: "inline-block", marginRight: 4 }} />{TYPES[h.type].label}{h.place ? ` · ${h.place}` : ""}</div></td>
+                  <td className="num nowrap">{(() => {
+                    const b = buys(h);
+                    if (!b.length) return "–";
+                    return <>{dstr(b[0].date)}{b.length > 1 && <div className="s">{b.length} lần · gần nhất {dstr(b[b.length - 1].date)}</div>}</>;
+                  })()}</td>
                   <td className="r num">{fmt2(h.qty)} {h.unit}</td>
                   <td className="r num">{h.qty ? money(P.avg) : "–"}</td>
-                  <td className="r num">{mk.get(h.priceKey)
-                    ? <>{money(h.price)}<div className="s">theo {mk.get(h.priceKey)!.label}</div></>
-                    : <PriceCell h={h} onSave={onQuickPrice} />}</td>
-                  <td className="r num"><b>{money(v)}</b></td>
-                  <td className={`r num ${p >= 0 ? "pos" : "neg"}`}>{signed(p)}<div className="s">{P.cost ? `${p >= 0 ? "+" : ""}${fmt2((p / P.cost) * 100)}%` : ""}</div></td>
-                  <td className={`r num ${P.realized >= 0 ? "pos" : "neg"}`}>{P.realized ? signed(P.realized) : "–"}</td>
+                  <td className="r num"><b>{money(v)}</b>{!mk.get(h.priceKey) && <div className="s">giá <PriceCell h={h} onSave={onQuickPrice} /></div>}</td>
+                  <td className={`r num ${p >= 0 ? "pos" : "neg"}`}>{h.qty ? <>{signed(p)}<div className="s">{P.cost ? `${p >= 0 ? "+" : ""}${fmt2((p / P.cost) * 100)}%` : ""}</div></> : "–"}
+                    {P.realized ? <div className={`s ${P.realized >= 0 ? "pos" : "neg"}`}>đã chốt {signed(P.realized)}</div> : null}</td>
                   <td className="r nowrap">
-                    <button className="btn small" onClick={() => onTrade(h, "buy")}>Mua</button>{" "}
                     <button className="btn small" disabled={!h.qty} onClick={() => onTrade(h, "sell")}>Bán</button>{" "}
                     <button className="btn small ghost" onClick={() => setOpenHist(openHist === h.id ? null : h.id)}>{openHist === h.id ? "Ẩn" : "Lịch sử"}</button>
-                    <button className="btn small ghost" onClick={() => onEdit(h)}>Sửa</button>
                   </td>
                 </tr>,
               ];
               if (openHist === h.id) out.push(
-                <tr key={h.id + "-h"} className="hist-tr"><td colSpan={8}>
+                <tr key={h.id + "-h"} className="hist-tr"><td colSpan={7}>
                   {hist.length ? hist.map((x) => (
                     <div className="hist-row4 num" key={x.id}>
                       <span>{dstr(x.date)}</span>
@@ -429,11 +432,15 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
                       <span>{money(x.kind === "buy" ? x.qty * x.price + x.fee : x.qty * x.price - x.fee)}</span>
                       <button className="btn small ghost danger" aria-label="Xoá giao dịch" onClick={() => onSaveTxns(h, (h.txns || []).filter((y) => y.id !== x.id))}>Xoá</button>
                     </div>
-                  )) : <div className="empty">Chưa có lịch sử. Tài sản nhập kiểu cũ: lần Mua/Bán tới sẽ tạo "số dư ban đầu" từ số hiện có.</div>}
+                  )) : <div className="empty">Chưa có lịch sử. Tài sản nhập kiểu cũ: lần Bán tới sẽ tạo "số dư ban đầu" từ số hiện có.</div>}
+                  <div className="hist-actions">
+                    <button className="btn small ghost" onClick={() => onTrade(h, "buy")}>+ Thêm lần mua</button>
+                    <button className="btn small ghost" onClick={() => onEdit(h)}>Sửa tài sản</button>
+                  </div>
                 </td></tr>,
               );
               return out;
-            }) : <tr><td colSpan={8} className="empty">Chưa có tài sản đầu tư. Bấm “+ Tài sản” để thêm.</td></tr>}
+            }) : <tr><td colSpan={7} className="empty">Chưa có tài sản đầu tư. Bấm “+ Tài sản” để thêm.</td></tr>}
           </tbody>
         </table>
       </div>
