@@ -115,7 +115,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
   const [flex, setFlex] = useState<FlexAccount[] | null>(null);
   const [markets, setMarkets] = useState<MarketPrice[]>([]);
   const [marketEdit, setMarketEdit] = useState<MarketPrice | "new" | null>(null);
-  const [tradeFor, setTradeFor] = useState<{ h: Holding; kind: "buy" | "sell" } | null>(null);
+  const [tradeFor, setTradeFor] = useState<{ h: Holding; kind: "buy" | "sell"; edit?: HoldingTxn } | null>(null);
   const [flexEdit, setFlexEdit] = useState<FlexAccount | "new" | null>(null);
   const [flexTxnFor, setFlexTxnFor] = useState<{ acc: FlexAccount; kind: FlexTxnKind } | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
@@ -365,7 +365,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
           {tab === "overview" && <Overview deps={deps} hold={hold} flex={flex} t={t} range={range} years={years} setRange={setRange} onCloseDep={setClosing} onPayout={setPayoutFor} />}
           {tab === "savings" && <Savings deps={deps} flex={flex} cash={(hold || []).filter((h) => h.type === "cash").reduce((s, h) => s + h.qty, 0)} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} onPayout={setPayoutFor}
             onFlexAdd={() => setFlexEdit("new")} onFlexEdit={setFlexEdit} onFlexTxn={(acc, kind) => setFlexTxnFor({ acc, kind })} />}
-          {tab === "invest" && <Invest hold={hold} deps={deps} flex={flex} t={t} markets={markets} onMarketPrice={marketPrice} onMarketEdit={setMarketEdit} onMarketAdd={() => setMarketEdit("new")} onTrade={(h, kind) => setTradeFor({ h, kind })} onSaveTxns={saveHoldTxns} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
+          {tab === "invest" && <Invest hold={hold} deps={deps} flex={flex} t={t} markets={markets} onMarketPrice={marketPrice} onMarketEdit={setMarketEdit} onMarketAdd={() => setMarketEdit("new")} onTrade={(h, kind, edit) => setTradeFor({ h, kind, edit })} onSaveTxns={saveHoldTxns} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
         </>
       )}
 

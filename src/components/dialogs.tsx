@@ -609,26 +609,27 @@ function HoldingForm({ draft, markets, onClose, onSave, onDelete, onCreateMarket
 
 /* ======================= Mua / Bán thêm ======================= */
 export function HoldingTxnDialog({ target, onClose, onSave }: {
-  target: { h: Holding; kind: "buy" | "sell" } | null; onClose: () => void;
+  target: { h: Holding; kind: "buy" | "sell"; edit?: HoldingTxn } | null; onClose: () => void;
   onSave: (h: Holding, txns: HoldingTxn[]) => Promise<boolean>;
 }) {
   return (
     <Modal open={!!target} onClose={onClose}>
-      {target && <HoldingTxnForm key={target.h.id + target.kind} h={target.h} kind={target.kind} onClose={onClose} onSave={onSave} />}
+      {target && <HoldingTxnForm key={target.h.id + target.kind + (target.edit?.id ?? "")} h={target.h} kind={target.kind} edit={target.edit} onClose={onClose} onSave={onSave} />}
     </Modal>
   );
 }
 
-function HoldingTxnForm({ h, kind, onClose, onSave }: { h: Holding; kind: "buy" | "sell"; onClose: () => void; onSave: (h: Holding, txns: HoldingTxn[]) => Promise<boolean> }) {
-  const base = legacyTxns(h);
+function HoldingTxnForm({ h, kind, edit, onClose, onSave }: { h: Holding; kind: "buy" | "sell"; edit?: HoldingTxn; onClose: () => void; onSave: (h: Holding, txns: HoldingTxn[]) => Promise<boolean> }) {
+  // Sửa giao dịch cũ: bỏ nó ra khỏi danh sách rồi ghi lại bản mới cùng id
+  const base = legacyTxns(h).filter((x) => x.id !== edit?.id);
   const before = position(base);
-  const [date, setDate] = useState(fd(today()));
-  const [qty, setQty] = useState("");
-  const [price, setPrice] = useState<number | null>(h.price || null);
-  const [fee, setFee] = useState<number | null>(null);
+  const [date, setDate] = useState(edit?.date ?? fd(today()));
+  const [qty, setQty] = useState(edit ? String(edit.qty) : "");
+  const [price, setPrice] = useState<number | null>(edit ? edit.price : h.price || null);
+  const [fee, setFee] = useState<number | null>(edit?.fee || null);
   const [busy, setBusy] = useState(false);
   const q = Number(qty) || 0;
-  const txn: HoldingTxn = { id: tid(), date, kind, qty: q, price: price || 0, fee: fee || 0, note: "" };
+  const txn: HoldingTxn = { id: edit?.id ?? tid(), date, kind, qty: q, price: price || 0, fee: fee || 0, note: edit?.note ?? "" };
   const after = q > 0 && price ? position([...base, txn]) : before;
   const over = kind === "sell" && q > before.qty + 1e-9;
   const valid = q > 0 && !!price && !!date && !over;
@@ -640,7 +641,7 @@ function HoldingTxnForm({ h, kind, onClose, onSave }: { h: Holding; kind: "buy" 
   };
   return (
     <>
-      <h3>{kind === "buy" ? "Mua thêm" : "Bán"} · {h.name}</h3>
+      <h3>{edit ? `Sửa lần ${kind === "buy" ? "mua" : "bán"}` : kind === "buy" ? "Mua thêm" : "Bán"} · {h.name}</h3>
       <div className="note num">Đang giữ {fmt2(before.qty)} {h.unit} · giá vốn TB {money(before.avg)}</div>
       <div className="fields">
         <label className="f">Ngày<input id="t_date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
@@ -659,7 +660,7 @@ function HoldingTxnForm({ h, kind, onClose, onSave }: { h: Holding; kind: "buy" 
       </div>
       <div className="dlg-actions">
         <button type="button" className="btn" onClick={onClose}>Huỷ</button>
-        <button type="button" className="btn primary" disabled={!valid || busy} onClick={submit}>{busy ? "Đang lưu…" : kind === "buy" ? "Ghi lần mua" : "Ghi lần bán"}</button>
+        <button type="button" className="btn primary" disabled={!valid || busy} onClick={submit}>{busy ? "Đang lưu…" : edit ? "Lưu" : kind === "buy" ? "Ghi lần mua" : "Ghi lần bán"}</button>
       </div>
     </>
   );

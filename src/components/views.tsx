@@ -369,7 +369,7 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
   onMarketEdit: (m: MarketPrice) => void; onMarketAdd: () => void;
   hold: Holding[]; deps: Deposit[]; flex: FlexAccount[]; t: number; onEdit: (h: Holding) => void;
   onQuickPrice: (h: Holding, price: number) => Promise<void>; onRefresh: () => void; refreshing: boolean;
-  onTrade: (h: Holding, kind: "buy" | "sell") => void; onSaveTxns: (h: Holding, txns: HoldingTxn[]) => Promise<boolean>;
+  onTrade: (h: Holding, kind: "buy" | "sell", edit?: HoldingTxn) => void; onSaveTxns: (h: Holding, txns: HoldingTxn[]) => Promise<boolean>;
 }) {
   const T = totals(deps, hold, t, flex);
   const [openHist, setOpenHist] = useState<string | null>(null);
@@ -430,7 +430,8 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
                       <span>{dstr(x.date)}</span>
                       <span className={x.kind === "buy" ? "" : "pos"}>{x.kind === "buy" ? "Mua" : "Bán"} {fmt2(x.qty)} {h.unit} × {money(x.price)}{x.fee ? ` · phí ${money(x.fee)}` : ""}{x.note ? ` · ${x.note}` : ""}</span>
                       <span>{money(x.kind === "buy" ? x.qty * x.price + x.fee : x.qty * x.price - x.fee)}</span>
-                      <button className="btn small ghost danger" aria-label="Xoá giao dịch" onClick={() => onSaveTxns(h, (h.txns || []).filter((y) => y.id !== x.id))}>Xoá</button>
+                      <span className="nowrap"><button className="btn small ghost" onClick={() => onTrade(h, x.kind, x)}>Sửa</button>
+                      <button className="btn small ghost danger" aria-label="Xoá giao dịch" onClick={() => onSaveTxns(h, (h.txns || []).filter((y) => y.id !== x.id))}>Xoá</button></span>
                     </div>
                   )) : <div className="empty">Chưa có lịch sử. Tài sản nhập kiểu cũ: lần Bán tới sẽ tạo "số dư ban đầu" từ số hiện có.</div>}
                   <div className="hist-actions">
