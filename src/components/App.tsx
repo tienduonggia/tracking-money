@@ -336,7 +336,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
       {deps === null || hold === null || flex === null ? <div className="skeleton">Đang tải dữ liệu…</div> : (
         <>
           {tab === "overview" && <Overview deps={deps} hold={hold} flex={flex} t={t} range={range} years={years} setRange={setRange} onCloseDep={setClosing} onPayout={setPayoutFor} />}
-          {tab === "savings" && <Savings deps={deps} flex={flex} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} onPayout={setPayoutFor}
+          {tab === "savings" && <Savings deps={deps} flex={flex} cash={(hold || []).filter((h) => h.type === "cash").reduce((s, h) => s + h.qty, 0)} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} onPayout={setPayoutFor}
             onFlexAdd={() => setFlexEdit("new")} onFlexEdit={setFlexEdit} onFlexTxn={(acc, kind) => setFlexTxnFor({ acc, kind })} />}
           {tab === "invest" && <Invest hold={hold} deps={deps} flex={flex} t={t} onTrade={(h, kind) => setTradeFor({ h, kind })} onSaveTxns={saveHoldTxns} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
         </>

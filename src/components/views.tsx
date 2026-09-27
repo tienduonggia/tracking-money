@@ -35,6 +35,8 @@ export function Overview({ deps, hold, flex, t, range, years, setRange, onCloseD
   const pending = pendingPayouts(deps);
   const T = totals(deps, hold, t, flex);
   const L = lifetime(deps, t, flex);
+  // Chỉ hiện phép cộng khi nó khớp thật (dữ liệu cũ nhập tay có thể lệch)
+  const eqOk = Math.abs(L.capital - L.withdrawn + L.realized + L.flexInterest + L.running - T.byType.saving - T.cash) < 1000;
   const Y = yearStats(deps, range, t, flex);
   const yNow = new Date(t).getUTCFullYear();
   const Ynow = yearStats(deps, String(yNow), t, flex);
@@ -58,6 +60,13 @@ export function Overview({ deps, hold, flex, t, range, years, setRange, onCloseD
             {T.invVal > 0 && <> · Đầu tư {moneyS(T.invVal)} <span className={pl >= 0 ? "pos" : "neg"}>({pl >= 0 ? "+" : ""}{moneyS(pl)})</span></>}
             {T.cash > 0 && <> · Tiền chờ {moneyS(T.cash)}</>}
           </p>
+          {eqOk && (
+            <p className="eq num">
+              Tiết kiệm{T.cash > 0 ? " + tiền chờ" : ""} = vốn {moneyS(L.capital)}
+              {L.withdrawn > 0 && <> − đã rút {moneyS(L.withdrawn)}</>}
+              {" "}+ lãi đã nhận {moneyS(L.realized + L.flexInterest)} + lãi đang chạy {moneyS(L.running)}
+            </p>
+          )}
         </div>
         <div className="kpis kpis3">
           <Kpi k="Tổng vốn" v={money(L.capital)} d={L.withdrawn > 0 ? `tiền mới bỏ vào · đã rút ra ${moneyS(L.withdrawn)}` : "tiền mới bỏ vào, không tính tái tục"} />
@@ -212,12 +221,17 @@ function MonthlyBars({ Y }: { Y: YStats }) {
 }
 
 /* ======================= Savings ======================= */
-export function Savings({ deps, flex, t, range, years, setRange, onEdit, onCloseDep, onPayout, onFlexAdd, onFlexEdit, onFlexTxn }: {
-  deps: Deposit[]; flex: FlexAccount[];
+export function Savings({ deps, flex, cash, t, range, years, setRange, onEdit, onCloseDep, onPayout, onFlexAdd, onFlexEdit, onFlexTxn }: {
+  deps: Deposit[]; flex: FlexAccount[]; cash: number;
   onFlexAdd: () => void; onFlexEdit: (f: FlexAccount) => void; onFlexTxn: (f: FlexAccount, kind: FlexTxnKind) => void; t: number; range: string; years: number[]; setRange: (r: string) => void;
   onEdit: (d: Deposit) => void; onCloseDep: (d: Deposit) => void; onPayout: (d: Deposit) => void;
 }) {
   const pendingIds = new Set(pendingPayouts(deps).map((d) => d.id));
+  // Lãi cũ đã quay vòng vào gốc: tiền đang nằm trong sổ/tích luỹ/tiền chờ − (vốn − đã rút) − lãi tích luỹ
+  const Lt = lifetime(deps, t, flex);
+  const activePrincipal = deps.filter((d) => d.status !== "closed").reduce((s, d) => s + d.principal, 0);
+  const flexValue = flex.reduce((s, f) => s + flexSim(f, t).value, 0);
+  const reinvested = activePrincipal + flexValue + cash - Lt.flexInterest - (Lt.capital - Lt.withdrawn);
   const [status, setStatus] = useState<"active" | "closed">("active");
   const [inst, setInst] = useState("");
   const Y = yearStats(deps, range, t, flex);
@@ -249,7 +263,7 @@ export function Savings({ deps, flex, t, range, years, setRange, onEdit, onClose
           <option value="">Tất cả nơi gửi</option>
           {insts.map((i) => <option key={i} value={i}>{i}</option>)}
         </select>
-        <span className="note">{list.length} sổ{status === "active" ? ` · gốc ${money(list.reduce((s, d) => s + d.principal, 0))}` : ""}</span>
+        <span className="note">{list.length} sổ{status === "active" ? ` · gốc ${money(list.reduce((s, d) => s + d.principal, 0))}` : ""}{status === "active" && !inst && reinvested > 1000 ? ` · gồm ${money(reinvested)} lãi đã gửi lại` : ""}</span>
       </div>
       {status === "active" ? <ActiveBooks list={list} t={t} onEdit={onEdit} onCloseDep={onCloseDep} /> : <ClosedTable list={list} onEdit={onEdit} pendingIds={pendingIds} onPayout={onPayout} />}
     </section>
