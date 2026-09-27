@@ -153,13 +153,28 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
   }, [deps, hold]);
 
   /* ---- mutations ---- */
-  const saveDep = async (id: string | undefined, x: DepositInput) => {
+  const saveDep = async (id: string | undefined, x: DepositInput, fundFrom?: string) => {
+    let r: Deposit;
     try {
-      const r = await api<Deposit>(id ? `/api/deposits/${id}` : "/api/deposits", { method: id ? "PUT" : "POST", json: x });
+      r = await api<Deposit>(id ? `/api/deposits/${id}` : "/api/deposits", { method: id ? "PUT" : "POST", json: x });
       setDeps((p) => (id ? (p || []).map((d) => (d.id === id ? r : d)) : [...(p || []), r]));
-      toast(id ? "Đã lưu thay đổi" : "Đã thêm sổ");
-      return true;
     } catch (e) { onErr(e); return false; }
+    // Mở sổ bằng tiền mặt có sẵn: trừ số dư để không tính trùng
+    const h = fundFrom ? (hold || []).find((z) => z.id === fundFrom) : undefined;
+    if (h) {
+      try {
+        const { id: hid, ...rest } = h;
+        const hr = await api<Holding>(`/api/holdings/${hid}`, { method: "PUT", json: { ...rest, qty: h.qty - x.principal, cost: h.cost - x.principal, priceDate: x.openDate } });
+        setHold((p) => (p || []).map((z) => (z.id === hid ? hr : z)));
+        toast(`Đã thêm sổ, trừ ${money(x.principal)} từ ${h.name}`);
+      } catch (e) {
+        onErr(e);
+        toast(`Đã thêm sổ nhưng chưa trừ được tiền mặt — sửa số dư ${h.name} ở tab Đầu tư`);
+      }
+      return true;
+    }
+    toast(id ? "Đã lưu thay đổi" : "Đã thêm sổ");
+    return true;
   };
   const delDep = async (id: string) => {
     try { await api(`/api/deposits/${id}`, { method: "DELETE" }); setDeps((p) => (p || []).filter((d) => d.id !== id)); toast("Đã xoá sổ"); }
@@ -282,7 +297,7 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
       <p className="note">Lãi tiền gửi ngân hàng của cá nhân được miễn thuế TNCN; ô “thuế” dành cho sản phẩm fintech/quỹ có khấu trừ.</p>
 
       <datalist id="instList">{places.map((p) => <option key={p} value={p} />)}</datalist>
-      <DepositDialog draft={depDraft} institutions={places} onClose={() => setDepDraft(null)} onSave={saveDep} onDelete={delDep} />
+      <DepositDialog draft={depDraft} institutions={places} cashAccounts={(hold || []).filter((h) => h.type === "cash" && h.qty > 0)} onClose={() => setDepDraft(null)} onSave={saveDep} onDelete={delDep} />
       <PayoutDialog deposit={payoutFor} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setPayoutFor(null)} onConfirm={recordPayout} />
       <CloseDialog deposit={closing} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setClosing(null)} onConfirm={confirmClose} />
       <ApproveDialog open={approve !== null} initialCode={approve || ""} onClose={() => setApprove(null)} toast={toast} />
