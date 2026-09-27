@@ -1,10 +1,11 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Deposit, DepositInput, Holding, HoldingInput } from "@/lib/types.ts";
+import type { Deposit, DepositInput, FlexAccount, FlexInput, FlexTxn, FlexTxnKind, Holding, HoldingInput } from "@/lib/types.ts";
 import { dstr, fd, money, today } from "@/lib/calc.ts";
 import { api, ApiError, getToken, setToken, tg } from "@/lib/client.ts";
 import { ToastProvider, TipLayer, useToast } from "./ui.tsx";
 import { ApproveDialog, PairLogin } from "./pairing.tsx";
+import { FlexDialog, FlexTxnDialog, type CashLink } from "./flex.tsx";
 import { Overview, Savings, Invest } from "./views.tsx";
 import { CloseDialog, DepositDialog, HoldingDialog, PayoutDialog, renewalDraft, type DepositDraft, type HoldingDraft, type Payout, type Rollover } from "./dialogs.tsx";
 
@@ -110,6 +111,9 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
   const toast = useToast();
   const [deps, setDeps] = useState<Deposit[] | null>(null);
   const [hold, setHold] = useState<Holding[] | null>(null);
+  const [flex, setFlex] = useState<FlexAccount[] | null>(null);
+  const [flexEdit, setFlexEdit] = useState<FlexAccount | "new" | null>(null);
+  const [flexTxnFor, setFlexTxnFor] = useState<{ acc: FlexAccount; kind: FlexTxnKind } | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [range, setRange] = useState(String(new Date().getFullYear()));
   const [depDraft, setDepDraft] = useState<DepositDraft | null>(null);
@@ -128,8 +132,8 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
 
   const load = useCallback(async () => {
     try {
-      const [d, h] = await Promise.all([api<Deposit[]>("/api/deposits"), api<Holding[]>("/api/holdings")]);
-      setDeps(d); setHold(h);
+      const [d, h, f] = await Promise.all([api<Deposit[]>("/api/deposits"), api<Holding[]>("/api/holdings"), api<FlexAccount[]>("/api/flex")]);
+      setDeps(d); setHold(h); setFlex(f);
     } catch (e) { onErr(e); }
   }, [onErr]);
 
@@ -163,10 +167,8 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
     const h = fundFrom ? (hold || []).find((z) => z.id === fundFrom) : undefined;
     if (h) {
       try {
-        const { id: hid, ...rest } = h;
-        const hr = await api<Holding>(`/api/holdings/${hid}`, { method: "PUT", json: { ...rest, qty: h.qty - Math.min(x.principal, h.qty), cost: Math.max(0, h.cost - Math.min(x.principal, h.qty)), priceDate: x.openDate } });
-        setHold((p) => (p || []).map((z) => (z.id === hid ? hr : z)));
-        toast(`Đã thêm sổ, trừ ${money(Math.min(x.principal, h.qty))} từ ${h.name}`);
+        const took = await deductCash(h.id, x.principal, x.openDate);
+        toast(`Đã thêm sổ, trừ ${money(took)} từ ${h.name}`);
       } catch (e) {
         onErr(e);
         toast(`Đã thêm sổ nhưng chưa trừ được tiền mặt — sửa số dư ${h.name} ở tab Đầu tư`);
@@ -206,6 +208,56 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
       setTimeout(() => { setDepDraft(renewalDraft(d, x, roll)); toast("Kiểm tra lãi suất mới rồi bấm Lưu"); }, 150);
     }
     return ok;
+  };
+  /** Trừ tiền chờ khi dùng nó để gửi tiếp. Trả về số thực trừ được (tối đa số dư). */
+  const deductCash = async (holdingId: string, amount: number, date: string) => {
+    const h = (hold || []).find((z) => z.id === holdingId);
+    if (!h) return 0;
+    const take = Math.min(amount, h.qty);
+    const { id, ...rest } = h;
+    const hr = await api<Holding>(`/api/holdings/${id}`, { method: "PUT", json: { ...rest, qty: h.qty - take, cost: Math.max(0, h.cost - take), priceDate: date } });
+    setHold((p) => (p || []).map((z) => (z.id === id ? hr : z)));
+    return take;
+  };
+  /** Nạp lấy từ tiền chờ: phần có trong tiền chờ là nội bộ, phần vượt là tiền mới. */
+  const splitFromCash = (txn: FlexTxn, link: CashLink): FlexTxn[] => {
+    if (txn.kind !== "deposit" || !link || !("holdingId" in link)) return [txn];
+    const h = (hold || []).find((z) => z.id === link.holdingId);
+    const take = Math.min(txn.amount, h?.qty ?? 0);
+    const out: FlexTxn[] = [{ ...txn, amount: take, external: false, note: txn.note || `Từ ${h?.name ?? "tiền chờ"}` }];
+    if (txn.amount > take) out.push({ ...txn, id: txn.id + "n", amount: txn.amount - take, external: true });
+    return out.filter((x) => x.amount > 0);
+  };
+  const putFlex = async (id: string | undefined, x: FlexInput) => {
+    const r = await api<FlexAccount>(id ? `/api/flex/${id}` : "/api/flex", { method: id ? "PUT" : "POST", json: x });
+    setFlex((p) => (id ? (p || []).map((f) => (f.id === id ? r : f)) : [...(p || []), r]));
+    return r;
+  };
+  const saveFlex = async (id: string | undefined, x: FlexInput, link: CashLink) => {
+    try {
+      const txns = !id && x.txns.length ? splitFromCash(x.txns[0], link) : x.txns;
+      await putFlex(id, { ...x, txns });
+      if (!id && link && "holdingId" in link) await deductCash(link.holdingId, x.txns[0].amount, x.txns[0].date);
+      toast(id ? "Đã lưu thay đổi" : "Đã thêm tài khoản tích luỹ");
+      return true;
+    } catch (e) { onErr(e); return false; }
+  };
+  const flexTxn = async (acc: FlexAccount, txn: FlexTxn, link: CashLink) => {
+    try {
+      const { id, ...rest } = acc;
+      await putFlex(id, { ...rest, txns: [...acc.txns, ...splitFromCash(txn, link)] });
+      if (txn.kind === "deposit" && link && "holdingId" in link) await deductCash(link.holdingId, txn.amount, txn.date);
+      if (txn.kind === "withdraw" && link) {
+        await addToCash("holdingId" in link
+          ? { dest: "existing", holdingId: link.holdingId, amount: txn.amount }
+          : { dest: "new", name: link.newName, place: link.place, amount: txn.amount }, txn.date);
+      } else toast(txn.kind === "deposit" ? "Đã nạp" : txn.kind === "withdraw" ? "Đã rút" : "Đã điều chỉnh");
+      return true;
+    } catch (e) { onErr(e); return false; }
+  };
+  const delFlex = async (id: string) => {
+    try { await api(`/api/flex/${id}`, { method: "DELETE" }); setFlex((p) => (p || []).filter((f) => f.id !== id)); toast("Đã xoá"); }
+    catch (e) { onErr(e); }
   };
   /** Ghi bù cho sổ đã tất toán trước đây: cộng tiền mặt trước, rồi đánh dấu sổ đã xử lý. */
   const recordPayout = async (d: Deposit, payout: Payout) => {
@@ -275,11 +327,12 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
         </div>
       </header>
 
-      {deps === null || hold === null ? <div className="skeleton">Đang tải dữ liệu…</div> : (
+      {deps === null || hold === null || flex === null ? <div className="skeleton">Đang tải dữ liệu…</div> : (
         <>
-          {tab === "overview" && <Overview deps={deps} hold={hold} t={t} range={range} years={years} setRange={setRange} onCloseDep={setClosing} onPayout={setPayoutFor} />}
-          {tab === "savings" && <Savings deps={deps} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} onPayout={setPayoutFor} />}
-          {tab === "invest" && <Invest hold={hold} deps={deps} t={t} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
+          {tab === "overview" && <Overview deps={deps} hold={hold} flex={flex} t={t} range={range} years={years} setRange={setRange} onCloseDep={setClosing} onPayout={setPayoutFor} />}
+          {tab === "savings" && <Savings deps={deps} flex={flex} t={t} range={range} years={years} setRange={setRange} onEdit={(d) => setDepDraft(d)} onCloseDep={setClosing} onPayout={setPayoutFor}
+            onFlexAdd={() => setFlexEdit("new")} onFlexEdit={setFlexEdit} onFlexTxn={(acc, kind) => setFlexTxnFor({ acc, kind })} />}
+          {tab === "invest" && <Invest hold={hold} deps={deps} flex={flex} t={t} onEdit={(h) => setHoldDraft(h)} onQuickPrice={quickPrice} onRefresh={refreshPrices} refreshing={refreshing} />}
         </>
       )}
 
@@ -301,6 +354,8 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
       <PayoutDialog deposit={payoutFor} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setPayoutFor(null)} onConfirm={recordPayout} />
       <CloseDialog deposit={closing} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setClosing(null)} onConfirm={confirmClose} />
       <ApproveDialog open={approve !== null} initialCode={approve || ""} onClose={() => setApprove(null)} toast={toast} />
+      <FlexDialog acc={flexEdit} cashAccounts={(hold || []).filter((h) => h.type === "cash" && h.qty > 0)} onClose={() => setFlexEdit(null)} onSave={saveFlex} onDelete={delFlex} />
+      <FlexTxnDialog target={flexTxnFor} cashAccounts={(hold || []).filter((h) => h.type === "cash")} onClose={() => setFlexTxnFor(null)} onConfirm={flexTxn} />
       <HoldingDialog draft={holdDraft} places={places} onClose={() => setHoldDraft(null)} onSave={saveHold} onDelete={delHold} />
     </div>
   );

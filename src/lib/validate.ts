@@ -1,5 +1,5 @@
 // Validate & chuẩn hoá input từ client. Thuần TS, test được độc lập.
-import type { DepositInput, HoldingInput, HoldingType, Tier } from "./types.ts";
+import type { Compounding, DepositInput, FlexInput, FlexTxn, HoldingInput, HoldingType, Tier } from "./types.ts";
 import { addMonths, effectiveRate } from "./calc.ts";
 
 export class ValidationError extends Error {}
@@ -97,4 +97,31 @@ export function parseHolding(b: Record<string, unknown>): HoldingInput {
     priceSource: cash ? "" : priceSource,
     note: str(b.note, 500),
   };
+}
+
+/* ---------- Tích luỹ không kỳ hạn ---------- */
+const COMPOUNDING: Compounding[] = ["daily", "monthly", "none"];
+
+export function parseFlex(b: Record<string, unknown>): FlexInput {
+  const institution = str(b.institution, 100);
+  if (!institution) throw new ValidationError("Thiếu nơi gửi");
+  const compounding = COMPOUNDING.includes(b.compounding as Compounding) ? (b.compounding as Compounding) : "none";
+  if (!Array.isArray(b.rates) || !b.rates.length || b.rates.length > 200) throw new ValidationError("Cần ít nhất một mức lãi suất");
+  const rates = b.rates
+    .map((r, i) => {
+      const x = (r ?? {}) as Record<string, unknown>;
+      return { from: date(x.from, `Lãi suất #${i + 1}: ngày áp dụng`), rate: num(x.rate, `Lãi suất #${i + 1}`, { max: 100 }) };
+    })
+    .sort((p, q) => (p.from < q.from ? -1 : 1));
+  const rawTx = Array.isArray(b.txns) ? b.txns : [];
+  if (rawTx.length > 2000) throw new ValidationError("Quá nhiều giao dịch");
+  const txns: FlexTxn[] = rawTx.map((t, i) => {
+    const x = (t ?? {}) as Record<string, unknown>;
+    const kind = x.kind === "deposit" || x.kind === "withdraw" || x.kind === "adjust" ? x.kind : null;
+    if (!kind) throw new ValidationError(`Giao dịch #${i + 1}: loại không hợp lệ`);
+    const amount = Math.round(num(x.amount, `Giao dịch #${i + 1}: số tiền`, { min: kind === "adjust" ? -1e15 : 1 }));
+    const id = typeof x.id === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(x.id) ? x.id : `t${i}-${Date.now().toString(36)}`;
+    return { id, date: date(x.date, `Giao dịch #${i + 1}: ngày`), kind, amount, external: kind === "adjust" ? false : x.external !== false, note: str(x.note, 200) };
+  });
+  return { institution, name: str(b.name, 100), compounding, taxPct: num(b.taxPct ?? 0, "Thuế", { max: 100 }), rates, txns, note: str(b.note, 500) };
 }

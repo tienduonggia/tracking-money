@@ -1,5 +1,5 @@
 // Domain logic dùng chung cho client và server. Không import gì từ Node/React.
-import type { Deposit, Holding, HoldingType, Tier } from "./types.ts";
+import type { Deposit, FlexAccount, Holding, HoldingType, Tier } from "./types.ts";
 
 export const DAY = 86_400_000;
 
@@ -156,17 +156,87 @@ export const PRESETS: { key: string; label: string; institution: string; tiers: 
   },
 ];
 
+/* ---------- Tích luỹ không kỳ hạn: mô phỏng theo ngày ---------- */
+export const rateOn = (acc: Pick<FlexAccount, "rates">, day: number) => {
+  let r = 0;
+  for (const x of acc.rates) if (pd(x.from) <= day) r = x.rate;
+  return r;
+};
+
+export interface FlexState {
+  value: number; // số dư + lãi chưa nhập gốc
+  balance: number; // số dư đã nhập gốc
+  pending: number; // lãi chưa nhập gốc
+  interest: number; // tổng lãi ròng (sau thuế) đã sinh ra, gồm điều chỉnh
+  daily: Map<number, number>; // ngày → lãi ròng sinh ra ngày đó (+ điều chỉnh)
+  inExt: number; outExt: number; // tiền mới vào / đem đi tiêu
+  inInt: number; outInt: number; // chuyển nội bộ
+  start: number | null;
+}
+
+/** Chạy từng ngày từ giao dịch đầu tiên đến hết ngày `t` (không gồm ngày t). Lãi đơn theo ngày /365. */
+export function flexSim(acc: FlexAccount, t: number): FlexState {
+  const st: FlexState = { value: 0, balance: 0, pending: 0, interest: 0, daily: new Map(), inExt: 0, outExt: 0, inInt: 0, outInt: 0, start: null };
+  const txns = [...acc.txns].sort((a, b) => pd(a.date) - pd(b.date));
+  if (!txns.length) return st;
+  const byDay = new Map<number, typeof txns>();
+  for (const x of txns) { const k = pd(x.date); byDay.set(k, [...(byDay.get(k) || []), x]); }
+  const start = pd(txns[0].date);
+  st.start = start;
+  const end = Math.max(t, pd(txns[txns.length - 1].date) + DAY); // luôn áp dụng hết các giao dịch đã nhập
+  const net = 1 - (acc.taxPct || 0) / 100;
+  for (let day = start; day < end; day += DAY) {
+    if (acc.compounding === "monthly" && new Date(day).getUTCDate() === 1 && day !== start) { st.balance += st.pending; st.pending = 0; }
+    for (const x of byDay.get(day) || []) {
+      if (x.kind === "deposit") { st.balance += x.amount; if (x.external) st.inExt += x.amount; else st.inInt += x.amount; }
+      else if (x.kind === "withdraw") {
+        st.balance -= x.amount;
+        if (st.balance < 0) { st.pending += st.balance; st.balance = 0; } // rút cả lãi chưa nhập gốc
+        if (x.external) st.outExt += x.amount; else st.outInt += x.amount;
+      } else { st.balance += x.amount; st.interest += x.amount; st.daily.set(day, (st.daily.get(day) || 0) + x.amount); }
+    }
+    if (day >= t) continue; // giao dịch tương lai: áp số dư nhưng chưa tính lãi
+    // Lãi tính trên số dư đã nhập gốc (lãi chờ nhập gốc hằng tháng / khi rút không sinh lãi)
+    const i = Math.max(0, st.balance) * rateOn(acc, day) / 100 / 365 * net;
+    if (acc.compounding === "daily") st.balance += i; else st.pending += i;
+    st.interest += i;
+    st.daily.set(day, (st.daily.get(day) || 0) + i);
+  }
+  st.value = st.balance + st.pending;
+  return st;
+}
+
+/** Lãi tích luỹ sinh ra trong [a, b). */
+export const flexInterestIn = (s: FlexState, a: number, b: number) => {
+  let sum = 0;
+  for (const [d, v] of s.daily) if (d >= a && d < b) sum += v;
+  return sum;
+};
+
 /** Phần vốn mới của sổ: ghi rõ thì dùng; sổ cũ: tái tục → 0, còn lại → cả gốc. */
 export const capitalOf = (d: Pick<Deposit, "newMoney" | "renewedFrom" | "principal">) =>
   d.newMoney ?? (d.renewedFrom ? 0 : d.principal);
 
-/** Tiết kiệm từ trước tới nay: vốn thật đã bỏ vào và tổng lời (đã nhận + đang chạy). */
-export function lifetime(deps: Deposit[], t: number) {
-  const capital = deps.reduce((s, d) => s + capitalOf(d), 0);
+/** Tiền của sổ đã tất toán "đem đi tiêu" (không ghi vào tiền chờ): nhận về trừ phần đã tái tục sang sổ con. */
+export function withdrawnOut(d: Deposit, deps: Deposit[]) {
+  if (d.status !== "closed" || d.payout !== "none") return 0;
+  const rolled = deps.filter((x) => x.renewedFrom === d.id).reduce((s, x) => s + (x.principal - capitalOf(x)), 0);
+  return Math.max(0, d.principal + netClosed(d) - rolled);
+}
+
+/**
+ * Tiết kiệm từ trước tới nay (sổ + tích luỹ):
+ * đã bỏ vào (tiền mới), đã rút ra (đem đi tiêu), tổng lời (đã nhận + đang chạy), đang có = vào − ra + lời.
+ */
+export function lifetime(deps: Deposit[], t: number, flex: FlexAccount[] = []) {
+  const sims = flex.map((f) => flexSim(f, t));
+  const capital = deps.reduce((s, d) => s + capitalOf(d), 0) + sims.reduce((s, x) => s + x.inExt, 0);
+  const withdrawn = deps.reduce((s, d) => s + withdrawnOut(d, deps), 0) + sims.reduce((s, x) => s + x.outExt, 0);
   const realized = deps.filter((d) => d.status === "closed").reduce((s, d) => s + netClosed(d), 0);
   const running = deps.filter((d) => d.status !== "closed").reduce((s, d) => s + accrued(d, t) * (1 - (d.taxPct || 0) / 100), 0);
-  const profit = realized + running;
-  return { capital, realized, running, profit, pct: capital ? (profit / capital) * 100 : 0 };
+  const flexInterest = sims.reduce((s, x) => s + x.interest, 0);
+  const profit = realized + running + flexInterest;
+  return { capital, withdrawn, realized, running, flexInterest, profit, holding: capital - withdrawn + profit, pct: capital ? (profit / capital) * 100 : 0 };
 }
 
 /** Sổ đã tất toán mà tiền nhận về chưa được ghi (sổ cũ trước khi có tính năng, không phải sổ đã tái tục). */
@@ -185,13 +255,14 @@ export function rangeBounds(r: string, t: number): [number, number, string] {
   return [Date.UTC(y, 0, 1), Date.UTC(y + 1, 0, 1), `năm ${y}`];
 }
 
-export function totals(deps: Deposit[], hold: Holding[], t: number) {
+export function totals(deps: Deposit[], hold: Holding[], t: number, flex: FlexAccount[] = []) {
+  const flexValue = flex.reduce((s, f) => s + flexSim(f, t).value, 0);
   const act = deps.filter((d) => d.status !== "closed");
   const principal = act.reduce((s, d) => s + d.principal, 0);
   const acc = act.reduce((s, d) => s + accrued(d, t), 0);
   const expected = act.reduce((s, d) => s + expGross(d) * (1 - (d.taxPct || 0) / 100), 0);
   const byType: Record<string, number> = Object.fromEntries(TYPE_ORDER.map((k) => [k, 0]));
-  byType.saving = principal + acc;
+  byType.saving = principal + acc + flexValue;
   let invVal = 0, invCost = 0;
   for (const h of hold) {
     const v = h.qty * h.price;
@@ -201,16 +272,18 @@ export function totals(deps: Deposit[], hold: Holding[], t: number) {
   const cash = hold.filter((h) => h.type === "cash").reduce((s, h) => s + h.qty * h.price, 0);
   const nw = Object.values(byType).reduce((a, b) => a + b, 0);
   const wRate = principal ? act.reduce((s, d) => s + d.principal * d.rate, 0) / principal : 0;
-  return { act, principal, acc, expected, byType, invVal, invCost, cash, nw, wRate };
+  return { act, principal, acc, expected, byType, invVal, invCost, cash, nw, wRate, flexValue };
 }
 
-export function yearStats(deps: Deposit[], r: string, t: number) {
+export function yearStats(deps: Deposit[], r: string, t: number, flex: FlexAccount[] = []) {
   const [a, b, label] = rangeBounds(r, t);
+  const sims = flex.map((f) => flexSim(f, t));
+  const flexInt = sims.reduce((s, x) => s + flexInterestIn(x, a, b), 0);
   const closed = deps.filter((d) => d.status === "closed" && pd(d.closeDate) >= a && pd(d.closeDate) < b);
   const gross = closed.reduce((s, d) => s + (d.interest || 0), 0);
   const tax = closed.reduce((s, d) => s + (d.tax || 0), 0);
   const fee = closed.reduce((s, d) => s + (d.fee || 0), 0);
-  const accrual = deps.reduce((s, d) => s + accrualInRange(d, a, b, t), 0);
+  const accrual = deps.reduce((s, d) => s + accrualInRange(d, a, b, t), 0) + flexInt;
   const earlies = closed.filter((d) => d.closeType === "early");
   // Lãi mất = lãi theo LS hợp đồng cho số ngày đã giữ − lãi thực nhận
   const lost = earlies.reduce((s, d) => s + Math.max(0, accrued(d, pd(d.closeDate)) - (d.interest || 0)), 0);
@@ -236,5 +309,13 @@ export function yearStats(deps: Deposit[], r: string, t: number) {
     const bk = buckets.find((x) => x.key === key);
     if (bk) bk.value += netClosed(d);
   }
-  return { label, closed, gross, tax, fee, net: gross - tax - fee, accrual, lost, early: earlies.length, buckets };
+  // Lãi tích luỹ không kỳ hạn: tính là đã nhận theo ngày sinh ra
+  for (const x of sims) for (const [day, v] of x.daily) {
+    if (day < a || day >= b) continue;
+    const c = new Date(day);
+    const key = r === "all" ? String(c.getUTCFullYear()) : `${c.getUTCFullYear()}-${c.getUTCMonth()}`;
+    const bk = buckets.find((z) => z.key === key);
+    if (bk) bk.value += v;
+  }
+  return { label, closed, gross, tax, fee, net: gross - tax - fee + flexInt, flexInt, accrual, lost, early: earlies.length, buckets };
 }

@@ -61,3 +61,19 @@ create table if not exists login_codes (
   consumed      boolean     not null default false,
   created_at    timestamptz not null default now()
 );
+
+-- Tích luỹ không kỳ hạn: lịch sử lãi suất và giao dịch lưu jsonb (quy mô cá nhân, vài trăm dòng)
+create table if not exists flex_accounts (
+  id           uuid primary key default gen_random_uuid(),
+  owner_id     bigint      not null,
+  institution  text        not null,
+  name         text        not null default '',
+  compounding  text        not null default 'none' check (compounding in ('daily','monthly','none')),
+  tax_pct      numeric(7,3) not null default 0,
+  rates        jsonb       not null default '[]',
+  txns         jsonb       not null default '[]',
+  note         text        not null default '',
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create index if not exists flex_owner_idx on flex_accounts (owner_id);

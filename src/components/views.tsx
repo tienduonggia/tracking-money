@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { Deposit, Holding } from "@/lib/types.ts";
+import type { Deposit, FlexAccount, FlexTxnKind, Holding } from "@/lib/types.ts";
+import { FlexSection } from "./flex.tsx";
 import {
-  TYPES, TYPE_ORDER, accrued, currentSegment, days, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
+  TYPES, TYPE_ORDER, accrued, currentSegment, days, flexSim, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
   termDays, totals, yearStats, fmt, fd, pendingPayouts, lifetime,
 } from "@/lib/calc.ts";
 
@@ -27,19 +28,20 @@ export function RangeSelect({ id, value, years, onChange }: { id: string; value:
 }
 
 /* ======================= Overview ======================= */
-export function Overview({ deps, hold, t, range, years, setRange, onCloseDep, onPayout }: {
-  deps: Deposit[]; hold: Holding[]; t: number; range: string; years: number[]; setRange: (r: string) => void;
+export function Overview({ deps, hold, flex, t, range, years, setRange, onCloseDep, onPayout }: {
+  deps: Deposit[]; hold: Holding[]; flex: FlexAccount[]; t: number; range: string; years: number[]; setRange: (r: string) => void;
   onCloseDep: (d: Deposit) => void; onPayout: (d: Deposit) => void;
 }) {
   const pending = pendingPayouts(deps);
-  const T = totals(deps, hold, t);
-  const Y = yearStats(deps, range, t);
+  const T = totals(deps, hold, t, flex);
+  const Y = yearStats(deps, range, t, flex);
   const yNow = new Date(t).getUTCFullYear();
-  const Ynow = yearStats(deps, String(yNow), t);
+  const Ynow = yearStats(deps, String(yNow), t, flex);
   const pl = T.invVal - T.invCost;
   const up = T.act.map((d) => ({ d, left: days(t, pd(d.maturityDate)) })).filter((x) => x.left <= 45).sort((a, b) => a.left - b.left);
   const map = new Map<string, number>();
   for (const d of T.act) map.set(d.institution, (map.get(d.institution) || 0) + d.principal + accrued(d, t));
+  for (const f of flex) { const v = flexSim(f, t).value; if (v > 0) map.set(f.institution, (map.get(f.institution) || 0) + v); }
   for (const h of hold) { const k = h.place || TYPES[h.type].label; map.set(k, (map.get(k) || 0) + h.qty * h.price); }
   const rows = [...map].sort((a, b) => b[1] - a[1]);
   const mx = Math.max(1, ...rows.map((r) => r[1]));
@@ -78,7 +80,7 @@ export function Overview({ deps, hold, t, range, years, setRange, onCloseDep, on
           </div>
         </div>
       )}
-      <Lifetime deps={deps} t={t} />
+      <Lifetime deps={deps} flex={flex} t={t} />
       <div className="grid3">
         <div className="panel">
           <h2>Phân bổ tài sản</h2>
@@ -123,17 +125,17 @@ export function Overview({ deps, hold, t, range, years, setRange, onCloseDep, on
   );
 }
 
-function Lifetime({ deps, t }: { deps: Deposit[]; t: number }) {
-  const L = lifetime(deps, t);
-  if (!deps.length) return null;
+function Lifetime({ deps, flex, t }: { deps: Deposit[]; flex: FlexAccount[]; t: number }) {
+  const L = lifetime(deps, t, flex);
+  if (!deps.length && !flex.length) return null;
   return (
     <div className="panel">
       <h2>Tiết kiệm từ trước tới nay <span className="sub">· không tính lại tiền tái tục / tiền chờ gửi lại</span></h2>
       <div className="lifetime">
         <div><div className="eyebrow">Vốn đã bỏ vào</div><div className="v num">{money(L.capital)}</div><div className="d">tiền mới, không tính tiền quay vòng</div></div>
-        <div><div className="eyebrow">Tổng lời</div><div className="v num pos">{money(L.profit)}</div><div className="d num">đã nhận {moneyS(L.realized)} · đang chạy {moneyS(L.running)}</div></div>
-        <div><div className="eyebrow">Tỷ suất lời</div><div className="v num">{fmt2(L.pct)}%</div><div className="d">trên vốn đã bỏ vào, sau thuế</div></div>
-        <div><div className="eyebrow">Vốn + lời</div><div className="v num">{money(L.capital + L.profit)}</div><div className="d">nếu không rút ra tiêu</div></div>
+        <div><div className="eyebrow">Đã rút ra</div><div className="v num">{money(L.withdrawn)}</div><div className="d">đem đi tiêu, không quay lại tiết kiệm</div></div>
+        <div><div className="eyebrow">Tổng lời</div><div className="v num pos">{money(L.profit)}</div><div className="d num">{fmt2(L.pct)}% trên vốn · sổ đã nhận {moneyS(L.realized)} · sổ đang chạy {moneyS(L.running)}{L.flexInterest ? ` · tích luỹ ${moneyS(L.flexInterest)}` : ""}</div></div>
+        <div><div className="eyebrow">Đang có</div><div className="v num">{money(L.holding)}</div><div className="d">= bỏ vào − rút ra + lời</div></div>
       </div>
     </div>
   );
@@ -224,14 +226,15 @@ function MonthlyBars({ Y }: { Y: YStats }) {
 }
 
 /* ======================= Savings ======================= */
-export function Savings({ deps, t, range, years, setRange, onEdit, onCloseDep, onPayout }: {
-  deps: Deposit[]; t: number; range: string; years: number[]; setRange: (r: string) => void;
+export function Savings({ deps, flex, t, range, years, setRange, onEdit, onCloseDep, onPayout, onFlexAdd, onFlexEdit, onFlexTxn }: {
+  deps: Deposit[]; flex: FlexAccount[];
+  onFlexAdd: () => void; onFlexEdit: (f: FlexAccount) => void; onFlexTxn: (f: FlexAccount, kind: FlexTxnKind) => void; t: number; range: string; years: number[]; setRange: (r: string) => void;
   onEdit: (d: Deposit) => void; onCloseDep: (d: Deposit) => void; onPayout: (d: Deposit) => void;
 }) {
   const pendingIds = new Set(pendingPayouts(deps).map((d) => d.id));
   const [status, setStatus] = useState<"active" | "closed">("active");
   const [inst, setInst] = useState("");
-  const Y = yearStats(deps, range, t);
+  const Y = yearStats(deps, range, t, flex);
   const insts = [...new Set(deps.map((d) => d.institution))].sort();
   const list = deps.filter((d) => (status === "active") === (d.status !== "closed") && (!inst || d.institution === inst));
 
@@ -243,13 +246,15 @@ export function Savings({ deps, t, range, years, setRange, onEdit, onCloseDep, o
         <span className="note">Tất toán trong {Y.label}: {Y.closed.length} sổ</span>
       </div>
       <div className="yearstrip">
-        <Strip k="Lãi thực nhận (ròng)" v={money(Y.net)} d={`${Y.closed.length} sổ đã tất toán`} c={Y.net > 0 ? "pos" : ""} />
+        <Strip k="Lãi thực nhận (ròng)" v={money(Y.net)} d={`${Y.closed.length} sổ đã tất toán${Y.flexInt ? ` + tích luỹ ${moneyS(Y.flexInt)}` : ""}`} c={Y.net > 0 ? "pos" : ""} />
         <Strip k="Thuế đã trừ" v={money(Y.tax)} d="trên lãi nhận" />
         <Strip k="Phí" v={money(Y.fee)} d="rút, chuyển tiền…" />
         <Strip k="Lãi sinh ra trong kỳ" v={money(Y.accrual)} d={range === "all" ? "tổng lãi đã sinh ra, kể cả sổ chưa đáo hạn" : "phần lãi thuộc kỳ này theo số ngày gửi, kể cả sổ chưa đáo hạn"} />
         <Strip k="Lãi mất do rút trước hạn" v={money(Y.lost)} d={`${Y.early} lần rút sớm`} c={Y.lost > 0 ? "neg" : ""} />
       </div>
+      <FlexSection flex={flex} t={t} onAdd={onFlexAdd} onEdit={onFlexEdit} onTxn={onFlexTxn} />
       <div className="toolbar">
+        <span className="eyebrow">Sổ có kỳ hạn</span>
         <div className="seg">
           <button aria-pressed={status === "active"} onClick={() => setStatus("active")}>Đang gửi</button>
           <button aria-pressed={status === "closed"} onClick={() => setStatus("closed")}>Đã tất toán</button>
@@ -358,11 +363,11 @@ function ClosedTable({ list, onEdit, pendingIds, onPayout }: {
 }
 
 /* ======================= Invest ======================= */
-export function Invest({ hold, deps, t, onEdit, onQuickPrice, onRefresh, refreshing }: {
-  hold: Holding[]; deps: Deposit[]; t: number; onEdit: (h: Holding) => void;
+export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, refreshing }: {
+  hold: Holding[]; deps: Deposit[]; flex: FlexAccount[]; t: number; onEdit: (h: Holding) => void;
   onQuickPrice: (h: Holding, price: number) => Promise<void>; onRefresh: () => void; refreshing: boolean;
 }) {
-  const T = totals(deps, hold, t);
+  const T = totals(deps, hold, t, flex);
   const pl = T.invVal - T.invCost;
   const rows = [...hold].sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type) || b.qty * b.price - a.qty * a.price);
   const hasAuto = hold.some((h) => h.priceSource);

@@ -49,3 +49,34 @@ export interface Holding {
 
 export type DepositInput = Omit<Deposit, "id">;
 export type HoldingInput = Omit<Holding, "id">;
+
+/* ---------- Tích luỹ không kỳ hạn ---------- */
+export type Compounding = "daily" | "monthly" | "none"; // lãi nhập gốc hằng ngày / hằng tháng / chỉ trả khi rút
+
+export interface FlexRate {
+  from: string; // YYYY-MM-DD, áp dụng từ ngày này
+  rate: number; // %/năm
+}
+
+export type FlexTxnKind = "deposit" | "withdraw" | "adjust";
+
+export interface FlexTxn {
+  id: string;
+  date: string;
+  kind: FlexTxnKind;
+  amount: number; // deposit/withdraw: > 0; adjust: +/- (khớp số dư với app ngân hàng, tính vào lời)
+  external: boolean; // true = tiền mới vào / đem đi tiêu; false = chuyển nội bộ (tiền chờ, sổ khác)
+  note: string;
+}
+
+export interface FlexAccount {
+  id: string;
+  institution: string;
+  name: string;
+  compounding: Compounding;
+  taxPct: number;
+  rates: FlexRate[]; // tăng dần theo from
+  txns: FlexTxn[];
+  note: string;
+}
+export type FlexInput = Omit<FlexAccount, "id">;

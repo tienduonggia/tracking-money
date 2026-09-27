@@ -1,6 +1,6 @@
 import "server-only";
 import { sql } from "./db.ts";
-import type { Deposit, DepositInput, Holding, HoldingInput } from "./types.ts";
+import type { Deposit, DepositInput, FlexAccount, FlexInput, Holding, HoldingInput } from "./types.ts";
 
 type Row = Record<string, unknown>;
 const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
@@ -138,4 +138,42 @@ export async function importAll(owner: number, deps: DepositInput[], holds: Hold
     for (const x of holds) await tx`insert into holdings ${tx({ ...holdRow(x), owner_id: owner })}`;
     return { deposits: deps.length, holdings: holds.length };
   });
+}
+
+/* ---------- tích luỹ không kỳ hạn ---------- */
+const toFlex = (r: Row): FlexAccount => ({
+  id: r.id as string,
+  institution: r.institution as string,
+  name: r.name as string,
+  compounding: r.compounding as FlexAccount["compounding"],
+  taxPct: Number(r.tax_pct),
+  rates: (r.rates as FlexAccount["rates"]) ?? [],
+  txns: (r.txns as FlexAccount["txns"]) ?? [],
+  note: r.note as string,
+});
+const flexRow = (s: Sql, x: FlexInput) => ({
+  institution: x.institution, name: x.name, compounding: x.compounding, tax_pct: x.taxPct,
+  rates: s.json(x.rates as unknown as Parameters<Sql["json"]>[0]),
+  txns: s.json(x.txns as unknown as Parameters<Sql["json"]>[0]),
+  note: x.note,
+});
+const FLEX_COLS = (s: Sql) => s`id, institution, name, compounding, tax_pct, rates, txns, note`;
+
+export async function listFlex(owner: number): Promise<FlexAccount[]> {
+  const s = sql();
+  return (await s`select ${FLEX_COLS(s)} from flex_accounts where owner_id = ${owner} order by created_at`).map(toFlex);
+}
+export async function createFlex(owner: number, x: FlexInput): Promise<FlexAccount> {
+  const s = sql();
+  const [r] = await s`insert into flex_accounts ${s({ ...flexRow(s, x), owner_id: owner })} returning ${FLEX_COLS(s)}`;
+  return toFlex(r);
+}
+export async function updateFlex(owner: number, id: string, x: FlexInput): Promise<FlexAccount | null> {
+  const s = sql();
+  const [r] = await s`update flex_accounts set ${s(flexRow(s, x))}, updated_at = now()
+    where id = ${id} and owner_id = ${owner} returning ${FLEX_COLS(s)}`;
+  return r ? toFlex(r) : null;
+}
+export async function deleteFlex(owner: number, id: string): Promise<boolean> {
+  return (await sql()`delete from flex_accounts where id = ${id} and owner_id = ${owner}`).count > 0;
 }

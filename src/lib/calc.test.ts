@@ -145,3 +145,48 @@ test("lifetime: vốn không tính tiền quay vòng, lời = đã nhận + đan
   assert.equal(L.realized, 5e6);
   assert.equal(Math.round(L.running), Math.round(105e6 * 0.05 * 182 / 365));
 });
+
+/* ---------- tích luỹ không kỳ hạn ---------- */
+import { flexSim, withdrawnOut } from "./calc.ts";
+import type { FlexAccount } from "./types.ts";
+const flex = (o: Partial<FlexAccount>): FlexAccount => ({
+  id: "f", institution: "Cake", name: "Tích luỹ", compounding: "none", taxPct: 0, note: "",
+  rates: [{ from: "2026-01-01", rate: 3.65 }], txns: [], ...o,
+});
+const tx = (date: string, kind: "deposit" | "withdraw" | "adjust", amount: number, external = true) => ({ id: date + kind, date, kind, amount, external, note: "" });
+
+test("flex: lãi đơn theo ngày, rút giữa chừng, đổi lãi suất", () => {
+  // 3,65%/năm trên 100tr = 10.000đ/ngày
+  const f = flex({ txns: [tx("2026-01-01", "deposit", 100e6), tx("2026-01-11", "withdraw", 50e6)], rates: [{ from: "2026-01-01", rate: 3.65 }, { from: "2026-01-21", rate: 7.3 }] });
+  const s = flexSim(f, pd("2026-01-31"));
+  // 10 ngày × 10k + 10 ngày × 5k + 10 ngày × 10k (50tr ở 7,3%)
+  assert.equal(Math.round(s.interest), 100_000 + 50_000 + 100_000);
+  assert.equal(Math.round(s.value), 50e6 + 250_000);
+  assert.equal(s.inExt, 100e6); assert.equal(s.outExt, 50e6);
+});
+
+test("flex: nhập gốc hằng ngày cao hơn lãi đơn; hằng tháng nhập vào ngày 1", () => {
+  const base = { txns: [tx("2026-01-01", "deposit", 100e6)] };
+  const t = pd("2026-03-01");
+  const simple = flexSim(flex(base), t).interest;
+  const daily = flexSim(flex({ ...base, compounding: "daily" }), t).interest;
+  const monthly = flexSim(flex({ ...base, compounding: "monthly" }), t);
+  assert.ok(daily > simple && monthly.interest > simple && monthly.interest < daily);
+  assert.equal(Math.round(monthly.pending), Math.round((100e6 + 310_000) * 0.0365 / 365 * 28)); // tháng 2 tính trên gốc đã cộng lãi tháng 1
+});
+
+test("flex: điều chỉnh tính vào lời; thuế trừ vào lãi", () => {
+  const f = flex({ taxPct: 5, txns: [tx("2026-01-01", "deposit", 100e6), tx("2026-01-11", "adjust", -1_234)] });
+  const s = flexSim(f, pd("2026-01-11"));
+  assert.equal(Math.round(s.interest), Math.round(100_000 * 0.95 - 1_234));
+});
+
+test("lifetime gồm tích luỹ + rút ra đem tiêu", () => {
+  const a = dep({ id: "a", principal: 100e6, status: "closed", closeDate: "2026-01-01", closeType: "matured", interest: 5e6, tax: 0, fee: 0, payout: "none" });
+  assert.equal(withdrawnOut(a, [a]), 105e6);
+  const f = flex({ txns: [tx("2026-01-01", "deposit", 10e6), tx("2026-01-11", "withdraw", 2e6)] });
+  const L = lifetime([a], pd("2026-01-21"), [f]);
+  assert.equal(L.capital, 110e6);
+  assert.equal(L.withdrawn, 107e6);
+  assert.equal(Math.round(L.holding), Math.round(8e6 + flexSim(f, pd("2026-01-21")).interest));
+});
