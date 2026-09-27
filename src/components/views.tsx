@@ -59,11 +59,10 @@ export function Overview({ deps, hold, flex, t, range, years, setRange, onCloseD
             {T.cash > 0 && <> · Tiền chờ {moneyS(T.cash)}</>}
           </p>
         </div>
-        <div className="kpis">
+        <div className="kpis kpis3">
           <Kpi k="Tổng vốn" v={money(L.capital)} d={L.withdrawn > 0 ? `tiền mới bỏ vào · đã rút ra ${moneyS(L.withdrawn)}` : "tiền mới bỏ vào, không tính tái tục"} />
           <Kpi k="Lãi thực nhận" v={<span className="pos">{money(L.realized + L.flexInterest)}</span>} d={`sau thuế · năm ${yNow}: ${moneyS(Ynow.net)}`} />
           <Kpi k="Lãi đang chạy" v={money(L.running)} d={`chưa đáo hạn, đã trừ thuế · tổng lời ${fmt2(L.pct)}% trên vốn`} />
-          <Kpi k="Thuế phải trả" v={money(L.taxPaid + L.taxDue)} d={`đã trừ ${moneyS(L.taxPaid)} · dự kiến ${moneyS(L.taxDue)}`} />
         </div>
       </div>
       {pending.length > 0 && (

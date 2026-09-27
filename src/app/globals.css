@@ -216,3 +216,6 @@ a.btn{text-decoration:none;color:inherit}
 .nowrap{white-space:nowrap}
 .hist-tr td{background:var(--surface-2)}
 .hist-row4{display:grid;grid-template-columns:90px 1fr auto auto;gap:10px;align-items:center;font-size:13px;padding:2px 0}
+.kpis.kpis3{grid-template-columns:repeat(3,1fr)}
+.kpis.kpis3 .kpi:nth-child(3){border-right:0}
+@media (max-width:900px){.kpis.kpis3{grid-template-columns:1fr}.kpis.kpis3 .kpi{border-right:0;border-bottom:1px solid var(--line-soft)}.kpis.kpis3 .kpi:last-child{border-bottom:0}}
