@@ -34,13 +34,14 @@ export function Overview({ deps, hold, flex, t, range, years, setRange, onCloseD
 }) {
   const pending = pendingPayouts(deps);
   const T = totals(deps, hold, t, flex);
+  const L = lifetime(deps, t, flex);
   const Y = yearStats(deps, range, t, flex);
   const yNow = new Date(t).getUTCFullYear();
   const Ynow = yearStats(deps, String(yNow), t, flex);
   const pl = T.invVal - T.invCost;
   const up = T.act.map((d) => ({ d, left: days(t, pd(d.maturityDate)) })).filter((x) => x.left <= 45).sort((a, b) => a.left - b.left);
   const map = new Map<string, number>();
-  for (const d of T.act) map.set(d.institution, (map.get(d.institution) || 0) + d.principal + accrued(d, t));
+  for (const d of T.act) map.set(d.institution, (map.get(d.institution) || 0) + d.principal + accrued(d, t) * (1 - (d.taxPct || 0) / 100));
   for (const f of flex) { const v = flexSim(f, t).value; if (v > 0) map.set(f.institution, (map.get(f.institution) || 0) + v); }
   for (const h of hold) { const k = h.place || TYPES[h.type].label; map.set(k, (map.get(k) || 0) + h.qty * h.price); }
   const rows = [...map].sort((a, b) => b[1] - a[1]);
@@ -52,14 +53,17 @@ export function Overview({ deps, hold, flex, t, range, years, setRange, onCloseD
         <div className="panel networth">
           <div className="eyebrow">Tổng tài sản</div>
           <div className="big num">{fmt(T.nw)}<small>₫</small></div>
-          <p>Tiết kiệm {moneyS(T.principal + T.acc)} · Đầu tư {moneyS(T.invVal)} · Tiền mặt {moneyS(T.cash)}</p>
+          <p>
+            Tiết kiệm {moneyS(T.byType.saving)}
+            {T.invVal > 0 && <> · Đầu tư {moneyS(T.invVal)} <span className={pl >= 0 ? "pos" : "neg"}>({pl >= 0 ? "+" : ""}{moneyS(pl)})</span></>}
+            {T.cash > 0 && <> · Tiền chờ {moneyS(T.cash)}</>}
+          </p>
         </div>
         <div className="kpis">
-          <Kpi k="Gốc đang gửi" v={money(T.principal)} d={`${T.act.length} sổ · LS bình quân ${fmt2(T.wRate)}%/năm`} />
-          <Kpi k="Lãi dồn tích đến hôm nay" v={money(T.acc)} d={`Dự kiến khi đáo hạn: ${moneyS(T.expected)}`} />
-          <Kpi k={`Lãi thực nhận ${yNow}`} v={money(Ynow.net)} d={`Thuế ${moneyS(Ynow.tax)} · Phí ${moneyS(Ynow.fee)}`} />
-          <Kpi k="Đầu tư (giá trị hiện tại)" v={money(T.invVal)}
-            d={<span className={pl >= 0 ? "pos" : "neg"}>{signed(pl)}{T.invCost ? ` (${pl >= 0 ? "+" : ""}${fmt2((pl / T.invCost) * 100)}%)` : ""}</span>} />
+          <Kpi k="Tổng vốn" v={money(L.capital)} d={L.withdrawn > 0 ? `tiền mới bỏ vào · đã rút ra ${moneyS(L.withdrawn)}` : "tiền mới bỏ vào, không tính tái tục"} />
+          <Kpi k="Lãi thực nhận" v={<span className="pos">{money(L.realized + L.flexInterest)}</span>} d={`sau thuế · năm ${yNow}: ${moneyS(Ynow.net)}`} />
+          <Kpi k="Lãi đang chạy" v={money(L.running)} d={`chưa đáo hạn, đã trừ thuế · tổng lời ${fmt2(L.pct)}% trên vốn`} />
+          <Kpi k="Thuế phải trả" v={money(L.taxPaid + L.taxDue)} d={`đã trừ ${moneyS(L.taxPaid)} · dự kiến ${moneyS(L.taxDue)}`} />
         </div>
       </div>
       {pending.length > 0 && (
@@ -80,7 +84,6 @@ export function Overview({ deps, hold, flex, t, range, years, setRange, onCloseD
           </div>
         </div>
       )}
-      <Lifetime deps={deps} flex={flex} t={t} />
       <div className="grid3">
         <div className="panel">
           <h2>Phân bổ tài sản</h2>
@@ -125,23 +128,7 @@ export function Overview({ deps, hold, flex, t, range, years, setRange, onCloseD
   );
 }
 
-function Lifetime({ deps, flex, t }: { deps: Deposit[]; flex: FlexAccount[]; t: number }) {
-  const L = lifetime(deps, t, flex);
-  if (!deps.length && !flex.length) return null;
-  return (
-    <div className="panel">
-      <h2>Tiết kiệm từ trước tới nay <span className="sub">· không tính lại tiền tái tục / tiền chờ gửi lại</span></h2>
-      <div className="lifetime">
-        <div><div className="eyebrow">Vốn đã bỏ vào</div><div className="v num">{money(L.capital)}</div><div className="d">tiền mới, không tính tiền quay vòng</div></div>
-        <div><div className="eyebrow">Đã rút ra</div><div className="v num">{money(L.withdrawn)}</div><div className="d">đem đi tiêu, không quay lại tiết kiệm</div></div>
-        <div><div className="eyebrow">Tổng lời</div><div className="v num pos">{money(L.profit)}</div><div className="d num">{fmt2(L.pct)}% trên vốn · sổ đã nhận {moneyS(L.realized)} · sổ đang chạy {moneyS(L.running)}{L.flexInterest ? ` · tích luỹ ${moneyS(L.flexInterest)}` : ""}</div></div>
-        <div><div className="eyebrow">Đang có</div><div className="v num">{money(L.holding)}</div><div className="d">= bỏ vào − rút ra + lời</div></div>
-      </div>
-    </div>
-  );
-}
-
-function Kpi({ k, v, d }: { k: string; v: string; d: React.ReactNode }) {
+function Kpi({ k, v, d }: { k: string; v: React.ReactNode; d: React.ReactNode }) {
   return <div className="kpi"><div className="eyebrow">{k}</div><div className="v num">{v}</div><div className="d num">{d}</div></div>;
 }
 

@@ -235,8 +235,12 @@ export function lifetime(deps: Deposit[], t: number, flex: FlexAccount[] = []) {
   const realized = deps.filter((d) => d.status === "closed").reduce((s, d) => s + netClosed(d), 0);
   const running = deps.filter((d) => d.status !== "closed").reduce((s, d) => s + accrued(d, t) * (1 - (d.taxPct || 0) / 100), 0);
   const flexInterest = sims.reduce((s, x) => s + x.interest, 0);
+  // Thuế: đã trừ khi tất toán + dự kiến trên lãi sổ đang chạy + đã trừ trên lãi tích luỹ
+  const taxPaid = deps.filter((d) => d.status === "closed").reduce((s, d) => s + (d.tax || 0), 0)
+    + flex.reduce((s, f, i) => s + (f.taxPct > 0 && f.taxPct < 100 ? (sims[i].interest * f.taxPct) / (100 - f.taxPct) : 0), 0);
+  const taxDue = deps.filter((d) => d.status !== "closed").reduce((s, d) => s + (accrued(d, t) * (d.taxPct || 0)) / 100, 0);
   const profit = realized + running + flexInterest;
-  return { capital, withdrawn, realized, running, flexInterest, profit, holding: capital - withdrawn + profit, pct: capital ? (profit / capital) * 100 : 0 };
+  return { capital, withdrawn, realized, running, flexInterest, profit, taxPaid, taxDue, holding: capital - withdrawn + profit, pct: capital ? (profit / capital) * 100 : 0 };
 }
 
 /** Sổ đã tất toán mà tiền nhận về chưa được ghi (sổ cũ trước khi có tính năng, không phải sổ đã tái tục). */
@@ -259,7 +263,8 @@ export function totals(deps: Deposit[], hold: Holding[], t: number, flex: FlexAc
   const flexValue = flex.reduce((s, f) => s + flexSim(f, t).value, 0);
   const act = deps.filter((d) => d.status !== "closed");
   const principal = act.reduce((s, d) => s + d.principal, 0);
-  const acc = act.reduce((s, d) => s + accrued(d, t), 0);
+  // Lãi dồn tích tính SAU thuế dự kiến → tổng tài sản khớp với vốn + lãi (cùng một cách tính)
+  const acc = act.reduce((s, d) => s + accrued(d, t) * (1 - (d.taxPct || 0) / 100), 0);
   const expected = act.reduce((s, d) => s + expGross(d) * (1 - (d.taxPct || 0) / 100), 0);
   const byType: Record<string, number> = Object.fromEntries(TYPE_ORDER.map((k) => [k, 0]));
   byType.saving = principal + acc + flexValue;
