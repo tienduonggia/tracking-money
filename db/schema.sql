@@ -29,6 +29,8 @@ create table if not exists deposits (
 alter table deposits add column if not exists tiers jsonb;
 -- Tiền nhận về khi tất toán: 'cash' = đã cộng vào tài sản tiền mặt, 'none' = không ghi, null = sổ cũ chưa xử lý
 alter table deposits add column if not exists payout text;
+-- Phần gốc là tiền mới bỏ vào (không phải tiền quay vòng từ sổ cũ / tiền chờ); null = sổ cũ, suy ra khi tính
+alter table deposits add column if not exists new_money numeric(18,0);
 
 create index if not exists deposits_owner_idx on deposits (owner_id, status, maturity_date);
 

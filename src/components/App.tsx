@@ -164,9 +164,9 @@ function Dashboard({ name, onLogout }: { name: string; onLogout: () => void }) {
     if (h) {
       try {
         const { id: hid, ...rest } = h;
-        const hr = await api<Holding>(`/api/holdings/${hid}`, { method: "PUT", json: { ...rest, qty: h.qty - x.principal, cost: h.cost - x.principal, priceDate: x.openDate } });
+        const hr = await api<Holding>(`/api/holdings/${hid}`, { method: "PUT", json: { ...rest, qty: h.qty - Math.min(x.principal, h.qty), cost: Math.max(0, h.cost - Math.min(x.principal, h.qty)), priceDate: x.openDate } });
         setHold((p) => (p || []).map((z) => (z.id === hid ? hr : z)));
-        toast(`Đã thêm sổ, trừ ${money(x.principal)} từ ${h.name}`);
+        toast(`Đã thêm sổ, trừ ${money(Math.min(x.principal, h.qty))} từ ${h.name}`);
       } catch (e) {
         onErr(e);
         toast(`Đã thêm sổ nhưng chưa trừ được tiền mặt — sửa số dư ${h.name} ở tab Đầu tư`);

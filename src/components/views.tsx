@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Deposit, Holding } from "@/lib/types.ts";
 import {
   TYPES, TYPE_ORDER, accrued, currentSegment, days, dstr, earlyInterest, expGross, fmt2, money, moneyS, netClosed, parseMoney, pd, signed,
-  termDays, totals, yearStats, fmt, fd, pendingPayouts,
+  termDays, totals, yearStats, fmt, fd, pendingPayouts, lifetime,
 } from "@/lib/calc.ts";
 
 type Totals = ReturnType<typeof totals>;
@@ -78,6 +78,7 @@ export function Overview({ deps, hold, t, range, years, setRange, onCloseDep, on
           </div>
         </div>
       )}
+      <Lifetime deps={deps} t={t} />
       <div className="grid3">
         <div className="panel">
           <h2>Phân bổ tài sản</h2>
@@ -119,6 +120,22 @@ export function Overview({ deps, hold, t, range, years, setRange, onCloseDep, on
         </div>
       </div>
     </section>
+  );
+}
+
+function Lifetime({ deps, t }: { deps: Deposit[]; t: number }) {
+  const L = lifetime(deps, t);
+  if (!deps.length) return null;
+  return (
+    <div className="panel">
+      <h2>Tiết kiệm từ trước tới nay <span className="sub">· không tính lại tiền tái tục / tiền chờ gửi lại</span></h2>
+      <div className="lifetime">
+        <div><div className="eyebrow">Vốn đã bỏ vào</div><div className="v num">{money(L.capital)}</div><div className="d">tiền mới, không tính tiền quay vòng</div></div>
+        <div><div className="eyebrow">Tổng lời</div><div className="v num pos">{money(L.profit)}</div><div className="d num">đã nhận {moneyS(L.realized)} · đang chạy {moneyS(L.running)}</div></div>
+        <div><div className="eyebrow">Tỷ suất lời</div><div className="v num">{fmt2(L.pct)}%</div><div className="d">trên vốn đã bỏ vào, sau thuế</div></div>
+        <div><div className="eyebrow">Vốn + lời</div><div className="v num">{money(L.capital + L.profit)}</div><div className="d">nếu không rút ra tiêu</div></div>
+      </div>
+    </div>
   );
 }
 

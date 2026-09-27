@@ -2,7 +2,7 @@
 import { useMemo, useState } from "react";
 import type { Deposit, DepositInput, Holding, HoldingInput, HoldingType, Tier } from "@/lib/types.ts";
 import {
-  PRESETS, accrued, addMonths, days, dstr, earlyInterest, effectiveRate, expGross, fd, fmt2, money, netClosed, pd, segments, signed,
+  PRESETS, capitalOf, accrued, addMonths, days, dstr, earlyInterest, effectiveRate, expGross, fd, fmt2, money, netClosed, pd, segments, signed,
   termDays, today,
 } from "@/lib/calc.ts";
 import { Modal, MoneyInput, Confirm } from "./ui.tsx";
@@ -58,6 +58,9 @@ function DepositForm({ draft, institutions, cashAccounts, onClose, onSave, onDel
   );
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  // Vốn mới: sổ mới tự tính; sửa sổ cũ thì hiện giá trị đang có, cho sửa tay
+  const [rolled0] = useState(draft.principal ?? 0);
+  const [newMoneyManual, setNewMoneyManual] = useState<number | null>(draft.id ? capitalOf({ newMoney: draft.newMoney ?? null, renewedFrom: draft.renewedFrom ?? null, principal: draft.principal ?? 0 }) : null);
   // Nguồn tiền: chỉ hỏi khi mở sổ mới không phải tái tục (tái tục lấy tiền từ sổ cũ)
   const askSource = !draft.id && !draft.renewedFrom && cashAccounts.length > 0;
   const [src, setSrc] = useState<string>(() => {
@@ -99,7 +102,11 @@ function DepositForm({ draft, institutions, cashAccounts, onClose, onSave, onDel
   const tax = (g * taxPct) / 100;
   const segs = valid && tiers ? segments(terms) : [];
   const srcAcc = askSource && src !== "new" ? cashAccounts.find((h) => h.id === src) : undefined;
-  const overdraw = !!srcAcc && principal > srcAcc.qty;
+  // Tiền quay vòng: lấy từ tiền chờ (tối đa số dư) hoặc gốc chuyển sang khi tái tục
+  const fromCash = srcAcc ? Math.min(principal, srcAcc.qty) : 0;
+  const recycled = draft.id ? 0 : fromCash + (draft.renewedFrom ? rolled0 : 0);
+  const autoNew = Math.max(0, principal - recycled);
+  const newMoney = newMoneyManual ?? autoNew;
 
   const submit = async () => {
     if (!valid) return;
@@ -111,7 +118,7 @@ function DepositForm({ draft, institutions, cashAccounts, onClose, onSave, onDel
       openDate: f.openDate, maturityDate, earlyRate: Number(f.earlyRate) || 0, taxPct, note: f.note.trim(),
       status: draft.status ?? "active", closeDate: draft.closeDate ?? null, closeType: draft.closeType ?? null,
       interest: draft.interest ?? null, tax: draft.tax ?? null, fee: draft.fee ?? null, renewedFrom: draft.renewedFrom ?? null,
-      payout: draft.payout ?? null,
+      payout: draft.payout ?? null, newMoney: Math.min(principal, newMoney),
     };
     const ok = await onSave(draft.id, base, srcAcc?.id);
     setBusy(false);
@@ -185,14 +192,17 @@ function DepositForm({ draft, institutions, cashAccounts, onClose, onSave, onDel
               <option value="new">Tiền mới bỏ thêm (không trừ tiền mặt)</option>
             </select>
             {srcAcc && (
-              <span className={overdraw ? "hint neg" : "hint"}>
-                {overdraw
-                  ? `Vượt số dư ${money(principal - srcAcc.qty)}. Sửa số dư tài khoản ở tab Đầu tư, hoặc chọn "Tiền mới".`
+              <span className="hint">
+                {principal > srcAcc.qty
+                  ? `Lấy hết ${money(srcAcc.qty)} từ ${srcAcc.name}, phần còn lại ${money(principal - srcAcc.qty)} tính là vốn mới.`
                   : `Sau khi mở sổ, ${srcAcc.name} còn ${money(srcAcc.qty - principal)}. Tổng tài sản không đổi.`}
               </span>
             )}
           </label>
         )}
+        <label className="f">Trong đó vốn mới bỏ vào (₫) <span className="hint">{draft.id ? "sửa nếu chưa đúng" : newMoneyManual === null ? "tự tính" : "đã sửa tay"}</span>
+          <MoneyInput id="d_newmoney" value={newMoney} onChange={(v) => setNewMoneyManual(v === null ? null : Math.min(v, principal))} />
+        </label>
         <label className="f full">Ghi chú
           <input id="d_note" value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Online, tái tục gốc…" />
         </label>
@@ -216,7 +226,7 @@ function DepositForm({ draft, institutions, cashAccounts, onClose, onSave, onDel
       <div className="dlg-actions">
         {draft.id && <button type="button" className="btn ghost danger left" onClick={() => setConfirmDel(true)}>Xoá sổ</button>}
         <button type="button" className="btn" onClick={onClose}>Huỷ</button>
-        <button type="button" className="btn primary" disabled={!valid || !f.institution.trim() || busy || overdraw} onClick={submit}>{busy ? "Đang lưu…" : "Lưu"}</button>
+        <button type="button" className="btn primary" disabled={!valid || !f.institution.trim() || busy} onClick={submit}>{busy ? "Đang lưu…" : "Lưu"}</button>
       </div>
       <Confirm
         open={confirmDel}

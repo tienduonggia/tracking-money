@@ -7,7 +7,7 @@ import type { Deposit } from "./types.ts";
 const dep = (o: Partial<Deposit>): Deposit => ({
   id: "x", institution: "MB", label: "", principal: 100_000_000, rate: 5, termMonths: 12, openDate: "2025-01-01",
   maturityDate: "2026-01-01", earlyRate: 0.5, taxPct: 0, note: "", status: "active", closeDate: null, closeType: null,
-  interest: null, tax: null, fee: null, renewedFrom: null, tiers: null, payout: null, ...o,
+  interest: null, tax: null, fee: null, renewedFrom: null, tiers: null, payout: null, newMoney: null, ...o,
 });
 
 test("addMonths kẹp cuối tháng", () => {
@@ -132,4 +132,16 @@ test("pendingPayouts: chỉ sổ cũ đã tất toán, chưa ghi, không tái t�
   const c = dep({ id: "c", status: "closed", closeDate: "2026-01-01", closeType: "matured", interest: 1 });
   const cNew = dep({ id: "c2", renewedFrom: "c" });
   assert.deepEqual(pendingPayouts([a, b, c, cNew, dep({ id: "act" })]).map((d) => d.id), ["a"]);
+});
+
+import { capitalOf, lifetime } from "./calc.ts";
+test("lifetime: vốn không tính tiền quay vòng, lời = đã nhận + đang chạy", () => {
+  const a = dep({ id: "a", principal: 100e6, status: "closed", closeDate: "2026-01-01", closeType: "matured", interest: 5e6, tax: 0, fee: 0 });
+  const b = dep({ id: "b", principal: 105e6, renewedFrom: "a", openDate: "2026-01-01", maturityDate: "2027-01-01", rate: 5 }); // tái tục gốc+lãi
+  const c = dep({ id: "c", principal: 20e6, newMoney: 5e6, openDate: "2026-01-01", maturityDate: "2027-01-01", rate: 0 }); // 15tr từ tiền chờ + 5tr mới
+  assert.deepEqual([a, b, c].map(capitalOf), [100e6, 0, 5e6]);
+  const L = lifetime([a, b, c], pd("2026-07-02"));
+  assert.equal(L.capital, 105e6);
+  assert.equal(L.realized, 5e6);
+  assert.equal(Math.round(L.running), Math.round(105e6 * 0.05 * 182 / 365));
 });

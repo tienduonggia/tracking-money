@@ -156,6 +156,19 @@ export const PRESETS: { key: string; label: string; institution: string; tiers: 
   },
 ];
 
+/** Phần vốn mới của sổ: ghi rõ thì dùng; sổ cũ: tái tục → 0, còn lại → cả gốc. */
+export const capitalOf = (d: Pick<Deposit, "newMoney" | "renewedFrom" | "principal">) =>
+  d.newMoney ?? (d.renewedFrom ? 0 : d.principal);
+
+/** Tiết kiệm từ trước tới nay: vốn thật đã bỏ vào và tổng lời (đã nhận + đang chạy). */
+export function lifetime(deps: Deposit[], t: number) {
+  const capital = deps.reduce((s, d) => s + capitalOf(d), 0);
+  const realized = deps.filter((d) => d.status === "closed").reduce((s, d) => s + netClosed(d), 0);
+  const running = deps.filter((d) => d.status !== "closed").reduce((s, d) => s + accrued(d, t) * (1 - (d.taxPct || 0) / 100), 0);
+  const profit = realized + running;
+  return { capital, realized, running, profit, pct: capital ? (profit / capital) * 100 : 0 };
+}
+
 /** Sổ đã tất toán mà tiền nhận về chưa được ghi (sổ cũ trước khi có tính năng, không phải sổ đã tái tục). */
 export function pendingPayouts(deps: Deposit[]) {
   const renewed = new Set(deps.map((d) => d.renewedFrom).filter(Boolean));
