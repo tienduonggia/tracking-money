@@ -380,6 +380,8 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
   const invCost = inv.reduce((s, h) => s + pos.get(h.id)!.cost, 0);
   const realized = inv.reduce((s, h) => s + pos.get(h.id)!.realized, 0);
   const pl = T.invVal - invCost;
+  // Tổng vàng quy ra chỉ (1 lượng = 10 chỉ)
+  const goldChi = inv.filter((h) => h.type === "gold").reduce((s, h) => s + h.qty * (h.unit.trim().toLowerCase() === "lượng" ? 10 : 1), 0);
   const rows = [...inv].sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type) || b.qty * b.price - a.qty * a.price);
   return (
     <section className="view">
@@ -388,6 +390,7 @@ export function Invest({ hold, deps, flex, t, onEdit, onQuickPrice, onRefresh, r
         <Strip k="Vốn đang đầu tư" v={money(invCost)} d="giá vốn của phần đang giữ" />
         <Strip k="Lời / lỗ chưa chốt" v={signed(pl)} d={invCost ? `${pl >= 0 ? "+" : ""}${fmt2((pl / invCost) * 100)}%` : ""} c={pl >= 0 ? "pos" : "neg"} />
         <Strip k="Lời / lỗ đã chốt" v={signed(realized)} d="từ các lần bán" c={realized >= 0 ? "pos" : "neg"} />
+        {goldChi > 0 && <Strip k="Vàng đang giữ" v={`${fmt2(goldChi)} chỉ`} d={`= ${fmt2(goldChi / 10)} lượng`} />}
       </div>
       <MarketPanel markets={markets} hold={hold} onSave={onMarketPrice} onEdit={onMarketEdit} onAdd={onMarketAdd} onRefresh={onRefresh} refreshing={refreshing} />
       <div className="tbl-wrap">

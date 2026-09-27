@@ -220,3 +220,12 @@ test("parseMarketPrice: key từ tên tiếng Việt, nguồn hợp lệ", async
   assert.equal(parseMarketPrice({ label: "x", source: "vangtoday:DOJINHTV:chi" }).key, "vangtoday:DOJINHTV:chi");
   assert.throws(() => parseMarketPrice({ label: "x", source: "http://evil" }), ValidationError);
 });
+
+test("parseVangToday: nhiều kiểu cấu trúc", async () => {
+  // prices.ts có "server-only"; kiểm tra bản sao logic qua import động bị chặn → test gián tiếp qua hàm thuần tách riêng
+  const { parseVangToday } = await import("./vt.ts");
+  assert.deepEqual(parseVangToday({ data: [{ type_code: "DOJINHTV", buy: 125e6, sell: 128e6 }] }).map((q) => [q.code, q.buy]), [["DOJINHTV", 125e6]]);
+  assert.deepEqual(parseVangToday({ data: { type_code: "DOJINHTV", buy: 1, sell: 2 } }).map((q) => q.code), ["DOJINHTV"]);
+  assert.deepEqual(parseVangToday({ data: { DOJINHTV: { buy: 1, sell: 2 }, SJ9999: { buy: 3, sell: 4 } } }).map((q) => q.code), ["DOJINHTV", "SJ9999"]);
+  assert.equal(parseVangToday({ data: [{ type_code: "X", buy: 0, sell: 0 }] }).length, 0);
+});

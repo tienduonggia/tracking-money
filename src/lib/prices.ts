@@ -1,5 +1,7 @@
 import "server-only";
 import { autoMarket, setMarketPrice } from "./repo.ts";
+import { parseVangToday, type GoldQuote } from "./vt.ts";
+export { parseVangToday };
 import { fd, today } from "./calc.ts";
 
 /** Lấy giá VND từ CoinGecko cho danh sách coin id (bitcoin, ethereum, ...). */
@@ -25,19 +27,38 @@ export { GOLD_CODES } from "./gold.ts";
  * Dùng giá MUA VÀO của tiệm (giá bán lại được thật) để định giá tài sản.
  * Đọc phòng thủ: data có thể là mảng hoặc 1 object; bỏ qua giá không hợp lệ.
  */
+const VT = "https://www.vang.today/api/prices";
+
+async function getVT(url: string) {
+  const res = await fetch(url, { headers: { accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`vang.today trả về ${res.status}`);
+  return parseVangToday(await res.json());
+}
+
+/** Tất cả mã vang.today đang trả về (để người dùng chọn đúng mã). */
+export const listVangToday = () => getVT(VT);
+
+/**
+ * Giá vàng từ vang.today: VND / lượng. Dùng giá MUA VÀO (giá tiệm mua lại), không có thì dùng giá bán.
+ * Lấy danh sách chung trước; mã nào thiếu thì gọi riêng ?type=CODE.
+ */
 export async function fetchVangToday(codes: string[]): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
-  const uniq = [...new Set(codes)];
-  if (!uniq.length) return out;
-  const res = await fetch("https://www.vang.today/api/prices", { headers: { accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
-  if (!res.ok) throw new Error(`vang.today trả về ${res.status}`);
-  const body = (await res.json()) as { data?: unknown };
-  const rows = Array.isArray(body.data) ? body.data : body.data ? [body.data] : [];
-  for (const r of rows as Record<string, unknown>[]) {
-    const code = String(r.type_code ?? r.code ?? "");
-    const buy = Number(r.buy);
-    if (uniq.includes(code) && Number.isFinite(buy) && buy > 0) out[code] = buy;
-  }
+  const want = [...new Set(codes)];
+  if (!want.length) return out;
+  const pick = (qs: GoldQuote[]) => {
+    for (const q of qs) {
+      const code = want.find((c) => c.toUpperCase() === q.code.toUpperCase());
+      if (code && !out[code]) out[code] = q.buy > 0 ? q.buy : q.sell;
+    }
+  };
+  let firstErr: Error | null = null;
+  try { pick(await getVT(VT)); } catch (e) { firstErr = e as Error; }
+  const missing = want.filter((c) => !out[c]);
+  await Promise.all(missing.map(async (c) => {
+    try { pick(await getVT(`${VT}?type=${encodeURIComponent(c)}`)); } catch (e) { firstErr ??= e as Error; }
+  }));
+  if (!Object.keys(out).length && firstErr) throw firstErr;
   return out;
 }
 

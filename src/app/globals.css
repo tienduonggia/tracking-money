@@ -222,3 +222,4 @@ a.btn{text-decoration:none;color:inherit}
 .networth .eq{margin-top:6px;font-size:12.5px;color:var(--ink-3)}
 .li.mkt{grid-template-columns:1fr auto auto}
 .mkt-price .s{color:var(--ink-3);font-size:12px}
+.mkt-hold{font-size:13px;margin:2px 0}

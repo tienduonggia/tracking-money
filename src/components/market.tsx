@@ -1,8 +1,10 @@
 "use client";
 import { useState } from "react";
 import type { Holding, MarketPrice, MarketPriceInput } from "@/lib/types.ts";
-import { dstr, fd, fmt, money, parseMoney, today } from "@/lib/calc.ts";
+import { dstr, fd, fmt, fmt2, money, moneyS, parseMoney, signed, today } from "@/lib/calc.ts";
 import { GOLD_CODES } from "@/lib/gold.ts";
+import { api } from "@/lib/client.ts";
+import type { GoldQuote } from "@/lib/vt.ts";
 import { Confirm, Modal, MoneyInput } from "./ui.tsx";
 
 const srcLabel = (src: string) => {
@@ -32,11 +34,25 @@ export function MarketPanel({ markets, hold, onSave, onEdit, onAdd, onRefresh, r
       {markets.length ? (
         <div className="list">
           {markets.map((m) => {
-            const n = hold.filter((h) => h.priceKey === m.key).length;
+            const linked = hold.filter((h) => h.priceKey === m.key);
+            const n = linked.length;
+            // Tổng số lượng quy về đơn vị của dòng giá (lượng ↔ chỉ)
+            const conv = (u: string) => {
+              const a = u.trim().toLowerCase(), b = m.unit.trim().toLowerCase();
+              return a === "lượng" && b === "chỉ" ? 10 : a === "chỉ" && b === "lượng" ? 0.1 : 1;
+            };
+            const qty = linked.reduce((s, h) => s + h.qty * conv(h.unit), 0);
+            const value = linked.reduce((s, h) => s + h.qty * h.price, 0);
+            const pl = value - linked.reduce((s, h) => s + h.cost, 0);
             return (
               <div className="li mkt" key={m.id}>
                 <div>
                   <div className="t">{m.label}</div>
+                  {n > 0 && (
+                    <div className="num mkt-hold">
+                      Đang có <b>{fmt2(qty)} {m.unit}</b> · giá trị {moneyS(value)} · <span className={pl >= 0 ? "pos" : "neg"}>{pl >= 0 ? "lời" : "lỗ"} {signed(pl)}</span>
+                    </div>
+                  )}
                   <div className="s">{srcLabel(m.source)} · {n} tài sản · cập nhật {dstr(m.priceDate)}</div>
                 </div>
                 <div className="num r"><MarketPriceCell m={m} onSave={onSave} /></div>
@@ -100,6 +116,16 @@ function MarketForm({ m, onClose, onSave, onDelete }: {
   const [price, setPrice] = useState<number | null>(m?.price ?? null);
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  // Danh sách mã thật vang.today đang trả về (bấm "Xem mã đang có")
+  const [live, setLive] = useState<GoldQuote[] | null>(null);
+  const [liveErr, setLiveErr] = useState<string | null>(null);
+  const [loadingLive, setLoadingLive] = useState(false);
+  const loadLive = async () => {
+    setLoadingLive(true); setLiveErr(null);
+    try { setLive(await api<GoldQuote[]>("/api/market/sources")); } catch (e) { setLiveErr((e as Error).message); }
+    setLoadingLive(false);
+  };
+  const perUnit = (q: GoldQuote) => (unit.trim().toLowerCase() === "lượng" ? 1 : 0.1) * (q.buy || q.sell);
   const source = kind === "gold" ? `vangtoday:${gold}:${unit.trim().toLowerCase() === "lượng" ? "luong" : "chi"}`
     : kind === "coin" && coin.trim() ? `coingecko:${coin.trim().toLowerCase()}` : "";
   const valid = label.trim() && (price ?? 0) >= 0;
@@ -121,8 +147,19 @@ function MarketForm({ m, onClose, onSave, onDelete }: {
           </select>
         </label>
         {kind === "gold" && (
-          <label className="f">Loại vàng
-            <select id="m_gold" value={gold} onChange={(e) => setGold(e.target.value)}>{GOLD_CODES.map((g) => <option key={g.code} value={g.code}>{g.label}</option>)}</select>
+          <label className="f">Loại vàng {live ? <span className="hint">{live.length} mã đang có</span> : null}
+            <select id="m_gold" value={gold} onChange={(e) => {
+              setGold(e.target.value);
+              const q = live?.find((x) => x.code === e.target.value);
+              if (q) setPrice(Math.round(perUnit(q)));
+            }}>
+              {live
+                ? live.map((q) => <option key={q.code} value={q.code}>{q.code}{q.name && q.name !== q.code ? ` · ${q.name}` : ""} — mua {money(perUnit(q))}/{unit || "chỉ"}</option>)
+                : GOLD_CODES.map((g) => <option key={g.code} value={g.code}>{g.label}</option>)}
+              {live && !live.some((q) => q.code === gold) && <option value={gold}>{gold} (không có trong dữ liệu hiện tại)</option>}
+            </select>
+            <button type="button" className="btn small ghost" style={{ justifySelf: "start" }} disabled={loadingLive} onClick={loadLive}>{loadingLive ? "Đang lấy…" : "Xem mã đang có trên vang.today"}</button>
+            {liveErr && <span className="hint neg">{liveErr}</span>}
           </label>
         )}
         {kind === "coin" && <label className="f">CoinGecko id<input id="m_coin" value={coin} onChange={(e) => setCoin(e.target.value)} placeholder="bitcoin" /></label>}
